@@ -58,11 +58,28 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	eventCh := make(chan redfish.Event, 128)
+
 	grp.Add(1)
 	go func() {
 		defer grp.Done()
+		for {
+			select {
+			case event, ok := <-eventCh:
+				if !ok {
+					return
+				}
+				handleEvent(&event, k8sClient, nodeName)
+			}
+		}
+	}()
+
+	grp.Add(1)
+	go func() {
+		defer grp.Done()
+		defer close(eventCh)
 		err := runServer(ctx, func(w http.ResponseWriter, r *http.Request) {
-			handleRedfishEvent(w, r, k8sClient, nodeName)
+			handleRedfishEvent(w, r, eventCh)
 		})
 		if err != nil {
 			log.Printf("Error running server: %v", err)
@@ -205,7 +222,7 @@ func runServer(ctx context.Context, handler http.HandlerFunc) error {
 	return nil
 }
 
-func handleRedfishEvent(w http.ResponseWriter, r *http.Request, k8sClient *kubernetes.Clientset, nodeName string) {
+func handleRedfishEvent(w http.ResponseWriter, r *http.Request, eventCh chan<- redfish.Event) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -224,6 +241,15 @@ func handleRedfishEvent(w http.ResponseWriter, r *http.Request, k8sClient *kuber
 		}
 	}()
 
+	eventCh <- event
+
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write([]byte("Event received")); err != nil {
+		log.Printf("Error writing response: %v", err)
+	}
+}
+
+func handleEvent(event *redfish.Event, k8sClient *kubernetes.Clientset, nodeName string) {
 	log.Printf("Received Redfish event:")
 	log.Printf("  ID: %s", event.ID)
 	log.Printf("  Name: %s", event.Name)
@@ -247,11 +273,6 @@ func handleRedfishEvent(w http.ResponseWriter, r *http.Request, k8sClient *kuber
 				log.Printf("Successfully updated node condition for %s", nodeName)
 			}
 		}
-	}
-
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write([]byte("Event received")); err != nil {
-		log.Printf("Error writing response: %v", err)
 	}
 }
 
