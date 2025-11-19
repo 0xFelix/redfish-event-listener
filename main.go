@@ -19,22 +19,23 @@ import (
 	"github.com/stmcginnis/gofish/redfish"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
 
 const (
-	envNodeName       = "NODE_NAME"
-	envDestinationURL = "DESTINATION_URL"
-
-	envRedfishURL      = "REDFISH_URL"
-	envRedfishUser     = "REDFISH_USER"
-	envRedfishPass     = "REDFISH_PASS"
+	envDestinationURL  = "DESTINATION_URL"
+	envPodNamespace    = "POD_NAMESPACE"
 	envRedfishInsecure = "REDFISH_INSECURE"
 
 	addr              = "0.0.0.0:8080"
 	readHeaderTimeout = 10
 	shutdownTimeout   = 5
+
+	eventContextPrefix = "RedfishEventListener-"
 )
 
 func main() {
@@ -43,17 +44,57 @@ func main() {
 	}
 }
 
+type NodeConfig struct {
+	NodeName string `json:"nodeName"`
+	URL      string `json:"url"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Insecure bool   `json:"insecure,omitempty"`
+}
+
+type nodeInfo struct {
+	nodeConfig   NodeConfig
+	subscription *redfish.EventDestination
+}
+
 func run() error {
-	k8sClient, err := createK8sClient()
+	k8sConfig, err := rest.InClusterConfig()
+	if err != nil {
+		return fmt.Errorf("failed to get in-cluster config: %w", err)
+	}
+
+	k8sClient, err := kubernetes.NewForConfig(k8sConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
-	nodeName := lookupEnv(envNodeName)
-	log.Printf("Monitoring node: %s", nodeName)
+	dynamicClient, err := dynamic.NewForConfig(k8sConfig)
+	nodeConfigs, err := getNodesConfigFromFARConfig(dynamicClient)
+	if err != nil {
+		return fmt.Errorf("failed read node configs: %w", err)
+	}
+
+	destinationURL := lookupEnv(envDestinationURL)
 
 	grp := sync.WaitGroup{}
 	defer grp.Wait()
+
+	nodeInfoMap := map[string]nodeInfo{}
+	nodeInfoMapLock := sync.RWMutex{}
+
+	defer func() {
+		nodeInfoMapLock.Lock()
+		defer nodeInfoMapLock.Unlock()
+		for _, info := range nodeInfoMap {
+			if info.subscription != nil {
+				log.Printf("Deleting Redfish event subscription: %s", info.subscription.ID)
+				if err := deleteSubscription(info.subscription, &info.nodeConfig); err != nil {
+					log.Print(err)
+				}
+			}
+		}
+		nodeInfoMap = map[string]nodeInfo{}
+	}()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -69,7 +110,23 @@ func run() error {
 				if !ok {
 					return
 				}
-				handleEvent(&event, k8sClient, nodeName)
+
+				nodeName, ok := strings.CutPrefix(event.Context, eventContextPrefix)
+				if !ok {
+					log.Printf("Event does not have valid context: %s", event.Context)
+					continue
+				}
+
+				nodeInfoMapLock.RLock()
+				info, ok := nodeInfoMap[nodeName]
+				nodeInfoMapLock.RUnlock()
+
+				if !ok {
+					log.Printf("Event node is not known: %s", nodeName)
+					continue
+				}
+
+				handleEvent(&event, k8sClient, info.nodeConfig.NodeName)
 			}
 		}
 	}()
@@ -86,22 +143,123 @@ func run() error {
 		}
 	}()
 
-	subscription, err := createSubscription(lookupEnv(envDestinationURL))
-	if err != nil {
-		return fmt.Errorf("failed to create event subscription: %w", err)
-	}
-	log.Printf("Created Redfish event subscription: %s", subscription.ID)
+	for _, config := range nodeConfigs {
+		log.Printf("Monitoring node: %s", config.NodeName)
 
-	defer func() {
-		log.Printf("Deleting Redfish event subscription: %s", subscription.ID)
-		if err := deleteSubscription(subscription); err != nil {
-			log.Print(err)
+		subscription, err := createSubscription(destinationURL, &config)
+		if err != nil {
+			return fmt.Errorf("failed to create event subscription: %w", err)
 		}
-	}()
+
+		nodeInfoMapLock.Lock()
+		nodeInfoMap[config.NodeName] = nodeInfo{
+			nodeConfig:   config,
+			subscription: subscription,
+		}
+		nodeInfoMapLock.Unlock()
+
+		log.Printf("Created Redfish event subscription: %s", subscription.ID)
+	}
 
 	grp.Wait()
 
 	return nil
+}
+
+func getNodesConfigFromFARConfig(client *dynamic.DynamicClient) ([]NodeConfig, error) {
+	namespace := lookupEnv(envPodNamespace)
+
+	objList, err := client.Resource(schema.GroupVersionResource{
+		Group:    "fence-agents-remediation.medik8s.io",
+		Version:  "v1alpha1",
+		Resource: "fenceagentsremediationtemplates",
+	}).Namespace(namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list FenceAgentsRemediationTemplates: %w", err)
+	}
+
+	var allNodeConfigs []NodeConfig
+	for _, obj := range objList.Items {
+		if obj.GetNamespace() != namespace {
+			continue
+		}
+
+		agent, found, err := unstructured.NestedString(obj.Object, "spec", "template", "spec", "agent")
+		if err != nil {
+			return nil, fmt.Errorf("failed to get .spec.template.spec.agent: %w", err)
+		}
+		if !found {
+			log.Printf("Skipped FenceAgentsRemediationTemplates \"%s/%s\", no agent is defined.", obj.GetNamespace(), obj.GetName())
+			continue
+		}
+
+		// Ignoring other agents
+		if agent != "fence_ipmilan" {
+			log.Printf("Skipped FenceAgentsRemediationTemplates \"%s/%s\", because its agent is %q", obj.GetNamespace(), obj.GetName(), agent)
+			continue
+		}
+
+		nodeConfigs, err := nodeConfigsFromFar(&obj)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get node config from FenceAgentsRemediationTemplates: %w", err)
+		}
+
+		allNodeConfigs = append(allNodeConfigs, nodeConfigs...)
+	}
+
+	return allNodeConfigs, nil
+}
+
+func nodeConfigsFromFar(obj *unstructured.Unstructured) ([]NodeConfig, error) {
+	nodeParameters, found, err := unstructured.NestedMap(obj.Object, "spec", "template", "spec", "nodeparameters")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get .spec.template.spec.nodeparameters: %w", err)
+	}
+
+	ips, found, err := unstructured.NestedStringMap(nodeParameters, "--ip")
+	if !found {
+		return nil, fmt.Errorf("failed to find '--ip' parameter")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error getting '--ip' parameter: %w", err)
+	}
+	users, found, err := unstructured.NestedStringMap(nodeParameters, "--username")
+	if !found {
+		return nil, fmt.Errorf("failed to find '--username' parameter")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error getting '--username' parameter: %w", err)
+	}
+	passwords, found, err := unstructured.NestedStringMap(nodeParameters, "--password")
+	if !found {
+		return nil, fmt.Errorf("failed to find '--password' parameter")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error getting '--password' parameter: %w", err)
+	}
+
+	var nodeConfigs []NodeConfig
+	for nodeName, ip := range ips {
+		user, ok := users[nodeName]
+		if !ok {
+			log.Printf("FAR config does not specify username for node %q, ignoring the node.", nodeName)
+			continue
+		}
+		password, ok := passwords[nodeName]
+		if !ok {
+			log.Printf("FAR config does not specify password for node %q, ignoring the node.", nodeName)
+			continue
+		}
+		nodeConfigs = append(nodeConfigs, NodeConfig{
+			NodeName: nodeName,
+			URL:      fmt.Sprintf("https://%s", ip),
+			Username: user,
+			Password: password,
+			Insecure: lookupInsecure(),
+		})
+	}
+
+	return nodeConfigs, nil
 }
 
 func lookupEnv(key string) string {
@@ -124,29 +282,20 @@ func lookupInsecure() bool {
 	return insecure
 }
 
-func createK8sClient() (*kubernetes.Clientset, error) {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get in-cluster config: %w", err)
-	}
-
-	return kubernetes.NewForConfig(config)
-}
-
-func createRedfishClient() (*gofish.APIClient, error) {
+func createRedfishClient(nodeConfig *NodeConfig) (*gofish.APIClient, error) {
 	config := gofish.ClientConfig{
-		Endpoint:  lookupEnv(envRedfishURL),
-		Username:  lookupEnv(envRedfishUser),
-		Password:  lookupEnv(envRedfishPass),
-		Insecure:  lookupInsecure(),
+		Endpoint:  nodeConfig.URL,
+		Username:  nodeConfig.Username,
+		Password:  nodeConfig.Password,
+		Insecure:  nodeConfig.Insecure,
 		BasicAuth: true,
 	}
 
 	return gofish.Connect(config)
 }
 
-func createSubscription(destinationURL string) (*redfish.EventDestination, error) {
-	client, err := createRedfishClient()
+func createSubscription(destinationURL string, nodeConfig *NodeConfig) (*redfish.EventDestination, error) {
+	client, err := createRedfishClient(nodeConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Redfish client: %w", err)
 	}
@@ -159,9 +308,13 @@ func createSubscription(destinationURL string) (*redfish.EventDestination, error
 
 	uri, err := redfish.CreateEventDestinationInstance(
 		client, service.Subscriptions, destinationURL,
-		nil, nil, nil,
-		redfish.RedfishEventDestinationProtocol, "RedfishEventListener",
-		redfish.RetryForeverDeliveryRetryPolicy, nil,
+		nil,
+		nil,
+		nil,
+		redfish.RedfishEventDestinationProtocol,
+		eventContextPrefix+nodeConfig.NodeName,
+		redfish.RetryForeverDeliveryRetryPolicy,
+		nil,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create event subscription: %w", err)
@@ -175,8 +328,8 @@ func createSubscription(destinationURL string) (*redfish.EventDestination, error
 	return dest, nil
 }
 
-func deleteSubscription(subscription *redfish.EventDestination) error {
-	client, err := createRedfishClient()
+func deleteSubscription(subscription *redfish.EventDestination, nodeConfig *NodeConfig) error {
+	client, err := createRedfishClient(nodeConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create Redfish client: %w", err)
 	}
@@ -240,6 +393,12 @@ func handleRedfishEvent(w http.ResponseWriter, r *http.Request, eventCh chan<- r
 			log.Printf("Error closing request body: %v", err)
 		}
 	}()
+
+	if !strings.HasPrefix(event.Context, eventContextPrefix) {
+		log.Printf("Received event with invalid context: %q", event.Context)
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
 
 	eventCh <- event
 

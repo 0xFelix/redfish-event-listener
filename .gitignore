@@ -2,6 +2,7 @@
 manifests/ingress.yaml
 manifests/pod.yaml
 manifests/secret.yaml
+manifests/rbac.yaml
 
 # IDE
 .idea/
