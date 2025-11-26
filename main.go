@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -51,6 +52,23 @@ func run() error {
 	nodeName := lookupEnv(envNodeName)
 	log.Printf("Monitoring node: %s", nodeName)
 
+	grp := sync.WaitGroup{}
+	defer grp.Wait()
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	grp.Add(1)
+	go func() {
+		defer grp.Done()
+		err := runServer(ctx, func(w http.ResponseWriter, r *http.Request) {
+			handleRedfishEvent(w, r, k8sClient, nodeName)
+		})
+		if err != nil {
+			log.Printf("Error running server: %v", err)
+		}
+	}()
+
 	subscription, err := createSubscription(lookupEnv(envDestinationURL))
 	if err != nil {
 		return fmt.Errorf("failed to create event subscription: %w", err)
@@ -64,20 +82,7 @@ func run() error {
 		}
 	}()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	s := startServer(cancel, func(w http.ResponseWriter, r *http.Request) {
-		handleRedfishEvent(w, r, k8sClient, nodeName)
-	})
-
-	quit, _ := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	<-quit.Done()
-
-	log.Println("Shutting down Redfish event listener")
-	ctx, cancel = context.WithTimeout(context.Background(), shutdownTimeout*time.Second)
-	defer cancel()
-	if err := s.Shutdown(ctx); err != nil {
-		return fmt.Errorf("server shutdown error: %w", err)
-	}
+	grp.Wait()
 
 	return nil
 }
@@ -167,7 +172,7 @@ func deleteSubscription(subscription *redfish.EventDestination) error {
 	return nil
 }
 
-func startServer(cancel context.CancelFunc, handler http.HandlerFunc) *http.Server {
+func runServer(ctx context.Context, handler http.HandlerFunc) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handler)
 
@@ -177,15 +182,27 @@ func startServer(cancel context.CancelFunc, handler http.HandlerFunc) *http.Serv
 		ReadHeaderTimeout: readHeaderTimeout * time.Second,
 	}
 
+	errCh := make(chan error)
 	go func() {
+		defer close(errCh)
 		log.Printf("Starting Redfish event listener on %s", addr)
 		if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("HTTP server error: %v", err)
-			cancel()
+			errCh <- fmt.Errorf("HTTP server error: %w", err)
 		}
 	}()
 
-	return s
+	select {
+	case <-ctx.Done():
+		log.Println("Shutting down Redfish event listener")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout*time.Second)
+		defer cancel()
+		if err := s.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("server shutdown error: %w", err)
+		}
+	case err := <-errCh:
+		return err
+	}
+	return nil
 }
 
 func handleRedfishEvent(w http.ResponseWriter, r *http.Request, k8sClient *kubernetes.Clientset, nodeName string) {
