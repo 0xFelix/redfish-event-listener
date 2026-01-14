@@ -44,13 +44,31 @@ import (
 
 var _ = Describe("Redish event server", func() {
 	Context("handling functionality", func() {
+		const (
+			nodeName = "node01"
+			token    = "TESTTOKEN1235421"
+		)
+
+		var infoState *node.NodeInfoState
+
+		BeforeEach(func() {
+			infoState = &node.NodeInfoState{
+				Infos: map[string]node.NodeInfo{
+					nodeName: {},
+				},
+				TokenToName: map[string]string{
+					token: nodeName,
+				},
+			}
+		})
+
 		DescribeTable("should rejects invalid",
 			func(makeReq func() *http.Request, expectedStatus int) {
-				eventCh := make(chan redfish.Event, 1)
+				eventCh := make(chan server.Event, 1)
 				rr := httptest.NewRecorder()
 				req := makeReq()
 
-				server.HandleRedfishEvent(rr, req, eventCh)
+				server.HandleRedfishEvent(rr, req, infoState, eventCh)
 
 				Expect(rr.Code).To(Equal(expectedStatus))
 				Expect(eventCh).NotTo(Receive())
@@ -63,19 +81,42 @@ var _ = Describe("Redish event server", func() {
 				func() *http.Request { return httptest.NewRequest(http.MethodPost, "/", strings.NewReader("not-json")) },
 				http.StatusBadRequest,
 			),
+			Entry("too long requests",
+				func() *http.Request {
+					prefix := strings.NewReader(`{"Context":"`)
+					sufix := strings.NewReader(`"}`)
+
+					// 2 MiB of repeating string
+					const contextStr = "repeating-context-"
+					longContext := bytes.NewReader(bytes.Repeat([]byte(contextStr), (2*1024*1024)/len(contextStr)))
+
+					return httptest.NewRequest(http.MethodPost, "/", io.MultiReader(prefix, longContext, sufix))
+				},
+				http.StatusBadRequest,
+			),
 			Entry("event context requests",
 				func() *http.Request {
 					ev := redfish.Event{Context: "wrong-ctx"}
-					body, _ := json.Marshal(ev)
+					body, err := json.Marshal(ev)
+					Expect(err).ToNot(HaveOccurred())
 					return httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
 				},
 				http.StatusBadRequest,
+			),
+			Entry("unauthorized requests",
+				func() *http.Request {
+					ev := redfish.Event{Context: common.EventContextPrefix + "incorrect-token"}
+					body, err := json.Marshal(ev)
+					Expect(err).ToNot(HaveOccurred())
+					return httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+				},
+				http.StatusUnauthorized,
 			),
 		)
 
 		It("should accept valid event and forwards it on channel", func() {
 			ev := redfish.Event{
-				Context: common.EventContextPrefix + "node01",
+				Context: common.EventContextPrefix + token,
 				Events: []redfish.EventRecord{
 					{
 						EventID:        "1",
@@ -89,28 +130,29 @@ var _ = Describe("Redish event server", func() {
 			body, err := json.Marshal(ev)
 			Expect(err).NotTo(HaveOccurred())
 
-			eventCh := make(chan redfish.Event, 1)
+			eventCh := make(chan server.Event, 1)
 			req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
 			rr := httptest.NewRecorder()
 
-			server.HandleRedfishEvent(rr, req, eventCh)
+			server.HandleRedfishEvent(rr, req, infoState, eventCh)
 			Expect(rr.Code).To(Equal(http.StatusOK))
 
 			b, err := io.ReadAll(rr.Body)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(b)).To(ContainSubstring("Event received"))
 
-			var received redfish.Event
+			var received server.Event
 			Expect(eventCh).To(Receive(&received))
-			Expect(received.Context).To(Equal(ev.Context))
-			Expect(received.Events).To(HaveLen(1))
+			Expect(received.NodeName).To(Equal(nodeName))
+			Expect(received.RedfishEvent.Context).To(Equal(ev.Context))
+			Expect(received.RedfishEvent.Events).To(HaveLen(1))
 		})
 	})
 
 	Context("watchdog event handling", func() {
 		DescribeTable("should set or not set a node condition based on watchdog event",
 			func(messageID string, expectCondition bool) {
-				nodeName := "node-1"
+				const nodeName = "node-1"
 				cs := fake.NewClientset(
 					&corev1.Node{
 						ObjectMeta: metav1.ObjectMeta{
@@ -118,19 +160,22 @@ var _ = Describe("Redish event server", func() {
 						},
 					},
 				)
-				ev := &redfish.Event{
-					Context: common.EventContextPrefix + nodeName,
-					Events: []redfish.EventRecord{
-						{
-							EventID:   "sub-1",
-							Message:   "something",
-							MessageID: messageID,
-							Severity:  "OK",
+				ev := &server.Event{
+					RedfishEvent: redfish.Event{
+						Context: common.EventContextPrefix + "test-token",
+						Events: []redfish.EventRecord{
+							{
+								EventID:   "sub-1",
+								Message:   "something",
+								MessageID: messageID,
+								Severity:  "OK",
+							},
 						},
 					},
+					NodeName: nodeName,
 				}
 
-				server.HandleEvent(ev, cs, nodeName)
+				server.HandleEvent(ev, cs)
 
 				n, err := cs.CoreV1().Nodes().Get(context.Background(), nodeName, metav1.GetOptions{})
 				Expect(err).NotTo(HaveOccurred())

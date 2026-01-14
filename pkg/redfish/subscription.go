@@ -27,7 +27,7 @@ func CreateRedfishClient(nodeConfig *node.NodeConfig) (*gofish.APIClient, error)
 	return gofish.Connect(config)
 }
 
-func CreateSubscription(destinationURL string, nodeConfig *node.NodeConfig, nodeName string) (string, error) {
+func CreateSubscription(destinationURL string, nodeConfig *node.NodeConfig, token string) (string, error) {
 	client, err := CreateRedfishClient(nodeConfig)
 	if err != nil {
 		return "", fmt.Errorf("failed to create Redfish client: %w", err)
@@ -43,13 +43,14 @@ func CreateSubscription(destinationURL string, nodeConfig *node.NodeConfig, node
 		return "", fmt.Errorf("failed to remove previous subscriptions: %w", err)
 	}
 
-	return createEventDestinationInstance(client, service, destinationURL, nodeName)
+	return createEventDestinationInstance(client, service, destinationURL, token)
 }
 
 func createEventDestinationInstance(client *gofish.APIClient, service *redfish.EventService,
-	destinationURL, nodeName string,
+	destinationURL, token string,
 ) (string, error) {
-	subContext := common.EventContextPrefix + nodeName
+	// We store the token in the context field, because not all redfish servers support the HttpHeaders field.
+	subContext := common.EventContextPrefix + token
 
 	// Do not use `deliveryRetryPolicy`, it does not work with HPE
 	uri, err := redfish.CreateEventDestinationInstance(

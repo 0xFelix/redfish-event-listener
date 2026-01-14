@@ -1,3 +1,3 @@
 package common
 
-const EventContextPrefix = "RedfishEventListener-"
+const EventContextPrefix = "REL-token-"
