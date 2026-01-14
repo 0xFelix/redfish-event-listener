@@ -36,7 +36,8 @@ func main() {
 	}
 }
 
-func run() error {
+// Ignoring linter, because we will change this function in future PRs.
+func run() error { //nolint:funlen
 	k8sConfig, err := rest.InClusterConfig()
 	if err != nil {
 		return fmt.Errorf("failed to get in-cluster config: %w", err)
@@ -48,6 +49,10 @@ func run() error {
 	}
 
 	dynamicClient, err := dynamic.NewForConfig(k8sConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create dynamic Kubernetes client: %w", err)
+	}
+
 	nodeConfigs, err := node.GetNodesConfigFromFARConfig(dynamicClient, lookupEnv(envPodNamespace), lookupInsecure())
 	if err != nil {
 		return fmt.Errorf("failed read node configs: %w", err)
@@ -78,35 +83,29 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	eventCh := make(chan redfish.Event, 128)
+	const eventChSize = 128
+	eventCh := make(chan redfish.Event, eventChSize)
 
 	grp.Add(1)
 	go func() {
 		defer grp.Done()
-		for {
-			select {
-			case event, ok := <-eventCh:
-				if !ok {
-					return
-				}
-
-				nodeName, ok := strings.CutPrefix(event.Context, eventContextPrefix)
-				if !ok {
-					log.Printf("Event does not have valid context: %s", event.Context)
-					continue
-				}
-
-				nodeInfoMapLock.RLock()
-				info, ok := nodeInfoMap[nodeName]
-				nodeInfoMapLock.RUnlock()
-
-				if !ok {
-					log.Printf("Event node is not known: %s", nodeName)
-					continue
-				}
-
-				server.HandleEvent(&event, k8sClient, info.NodeConfig.NodeName)
+		for event := range eventCh {
+			nodeName, ok := strings.CutPrefix(event.Context, eventContextPrefix)
+			if !ok {
+				log.Printf("Event does not have valid context: %s", event.Context)
+				continue
 			}
+
+			nodeInfoMapLock.RLock()
+			info, ok := nodeInfoMap[nodeName]
+			nodeInfoMapLock.RUnlock()
+
+			if !ok {
+				log.Printf("Event node is not known: %s", nodeName)
+				continue
+			}
+
+			server.HandleEvent(&event, k8sClient, info.NodeConfig.NodeName)
 		}
 	}()
 

@@ -112,7 +112,11 @@ func getFreeEventSubscription(subscriptions []*redfish.EventDestination) *redfis
 	return nil
 }
 
-func modifySupermicroEventSubscription(eventSubscription *redfish.EventDestination, destinationURL, subContext string) *redfish.EventDestination {
+func modifySupermicroEventSubscription(
+	eventSubscription *redfish.EventDestination,
+	destinationURL,
+	subContext string,
+) *redfish.EventDestination {
 	// Create shallow copy of originalEventSubscription, only new values are
 	// assigned to fields below (top-level fields only)
 	newEventSubscription := *eventSubscription
