@@ -13,7 +13,7 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@v6
- 
+
       - name: Install Golang
         uses: actions/setup-go@v6
         with:
@@ -36,7 +36,7 @@ jobs:
 
       - name: Run make vendor
         run: make vendor
-      
+
       - name: Run make fmt
         run: make fmt
 
@@ -47,3 +47,17 @@ jobs:
             git status --porcelain
             exit 1
           fi
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Golang
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Run linter
+        run: make lint

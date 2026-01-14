@@ -68,6 +68,9 @@ func GetNodesConfigFromFARConfig(client dynamic.Interface, namespace string, ins
 
 func nodeConfigsFromFar(obj *unstructured.Unstructured, insecure bool) ([]NodeConfig, error) {
 	nodeParameters, found, err := unstructured.NestedMap(obj.Object, "spec", "template", "spec", "nodeparameters")
+	if !found {
+		return nil, fmt.Errorf("failed to find .spec.template.spec.nodeparameters")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get .spec.template.spec.nodeparameters: %w", err)
 	}
