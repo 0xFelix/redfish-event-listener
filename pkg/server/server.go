@@ -13,6 +13,7 @@ import (
 	"github.com/stmcginnis/gofish/redfish"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/0xfelix/redfish-event-listener/pkg/common"
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
 	redfishlib "github.com/0xfelix/redfish-event-listener/pkg/redfish"
 )
@@ -60,7 +61,7 @@ func RunServer(ctx context.Context, handler http.HandlerFunc) error {
 
 // HandleRedfishEvent decodes a Redfish Event from the request, validates its context,
 // and sends it to the provided channel.
-func HandleRedfishEvent(w http.ResponseWriter, r *http.Request, eventCh chan<- redfish.Event, eventContextPrefix string) {
+func HandleRedfishEvent(w http.ResponseWriter, r *http.Request, eventCh chan<- redfish.Event) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -79,7 +80,7 @@ func HandleRedfishEvent(w http.ResponseWriter, r *http.Request, eventCh chan<- r
 		}
 	}()
 
-	if !strings.HasPrefix(event.Context, eventContextPrefix) {
+	if !strings.HasPrefix(event.Context, common.EventContextPrefix) {
 		log.Printf("Received event with invalid context: %q", event.Context)
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return

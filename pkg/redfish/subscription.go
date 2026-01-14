@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strings"
 
 	"github.com/stmcginnis/gofish"
-	"github.com/stmcginnis/gofish/common"
+	redfishcommon "github.com/stmcginnis/gofish/common"
 	"github.com/stmcginnis/gofish/redfish"
 
+	"github.com/0xfelix/redfish-event-listener/pkg/common"
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
 )
 
@@ -37,7 +39,7 @@ func CreateRedfishClient(nodeConfig *node.NodeConfig) (*gofish.APIClient, error)
 	return gofish.Connect(config)
 }
 
-func CreateSubscription(destinationURL string, nodeConfig *node.NodeConfig, eventContext string) (string, error) {
+func CreateSubscription(destinationURL string, nodeConfig *node.NodeConfig, nodeName string) (string, error) {
 	client, err := CreateRedfishClient(nodeConfig)
 	if err != nil {
 		return "", fmt.Errorf("failed to create Redfish client: %w", err)
@@ -49,12 +51,18 @@ func CreateSubscription(destinationURL string, nodeConfig *node.NodeConfig, even
 		return "", fmt.Errorf("failed to get EventService: %w", err)
 	}
 
-	return createEventDestinationInstance(client, service, destinationURL, eventContext)
+	if err = removePreviousEventDestinations(service); err != nil {
+		return "", fmt.Errorf("failed to remove previous subscriptions: %w", err)
+	}
+
+	return createEventDestinationInstance(client, service, destinationURL, nodeName)
 }
 
 func createEventDestinationInstance(client *gofish.APIClient, service *redfish.EventService,
-	destinationURL, subContext string,
+	destinationURL, nodeName string,
 ) (string, error) {
+	subContext := common.EventContextPrefix + nodeName
+
 	// Do not use `deliveryRetryPolicy`, it does not work with HPE
 	uri, err := redfish.CreateEventDestinationInstance(
 		client, service.Subscriptions, destinationURL,
@@ -71,7 +79,7 @@ func createEventDestinationInstance(client *gofish.APIClient, service *redfish.E
 		return uri, nil
 	}
 
-	var redfishErr *common.Error
+	var redfishErr *redfishcommon.Error
 	if ok := errors.As(err, &redfishErr); !ok || redfishErr.HTTPReturnedStatusCode != http.StatusMethodNotAllowed {
 		return "", fmt.Errorf("failed to create event subscription: %w", err)
 	}
@@ -79,6 +87,25 @@ func createEventDestinationInstance(client *gofish.APIClient, service *redfish.E
 	// Fallback, try to get the event subscriptions, in vendors such as SuperMicro H/X12 they have a set of
 	// predefined event subscriptions that are not created by the user
 	return usePredefinedEventDestinationInstance(service, destinationURL, subContext)
+}
+
+func removePreviousEventDestinations(service *redfish.EventService) error {
+	subs, err := service.GetEventSubscriptions()
+	if err != nil {
+		return fmt.Errorf("failed to get event subscriptions: %w", err)
+	}
+
+	for _, sub := range subs {
+		if !strings.HasPrefix(sub.Context, common.EventContextPrefix) {
+			continue
+		}
+
+		if err := service.DeleteEventSubscription(sub.ODataID); err != nil {
+			return fmt.Errorf("failed to delete event subscription: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func usePredefinedEventDestinationInstance(service *redfish.EventService, destinationURL, subContext string) (string, error) {
