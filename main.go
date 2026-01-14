@@ -2,22 +2,20 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 
-	"github.com/stmcginnis/gofish/redfish"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
-	"github.com/0xfelix/redfish-event-listener/pkg/common"
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
 	redfishlib "github.com/0xfelix/redfish-event-listener/pkg/redfish"
 	"github.com/0xfelix/redfish-event-listener/pkg/server"
@@ -62,49 +60,37 @@ func run() error { //nolint:funlen
 	grp := sync.WaitGroup{}
 	defer grp.Wait()
 
-	nodeInfoMap := map[string]node.NodeInfo{}
-	nodeInfoMapLock := sync.RWMutex{}
+	infoState := &node.NodeInfoState{
+		Infos:       map[string]node.NodeInfo{},
+		TokenToName: map[string]string{},
+	}
 
 	defer func() {
-		nodeInfoMapLock.Lock()
-		defer nodeInfoMapLock.Unlock()
-		for _, info := range nodeInfoMap {
+		infoState.Lock.Lock()
+		defer infoState.Lock.Unlock()
+		for _, info := range infoState.Infos {
 			if info.SubscriptionID != "" {
 				log.Printf("Deleting Redfish event subscription: %s", info.SubscriptionID)
-				if err := redfishlib.DeleteSubscription(info.SubscriptionID, &info.NodeConfig); err != nil {
-					log.Print(err)
+				if delErr := redfishlib.DeleteSubscription(info.SubscriptionID, &info.NodeConfig); delErr != nil {
+					log.Print(delErr)
 				}
 			}
 		}
-		nodeInfoMap = map[string]node.NodeInfo{}
+		infoState.Infos = map[string]node.NodeInfo{}
+		infoState.TokenToName = map[string]string{}
 	}()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	const eventChSize = 128
-	eventCh := make(chan redfish.Event, eventChSize)
+	eventCh := make(chan server.Event, eventChSize)
 
 	grp.Add(1)
 	go func() {
 		defer grp.Done()
 		for event := range eventCh {
-			nodeName, ok := strings.CutPrefix(event.Context, common.EventContextPrefix)
-			if !ok {
-				log.Printf("Event does not have valid context: %s", event.Context)
-				continue
-			}
-
-			nodeInfoMapLock.RLock()
-			info, ok := nodeInfoMap[nodeName]
-			nodeInfoMapLock.RUnlock()
-
-			if !ok {
-				log.Printf("Event node is not known: %s", nodeName)
-				continue
-			}
-
-			server.HandleEvent(&event, k8sClient, info.NodeConfig.NodeName)
+			server.HandleEvent(&event, k8sClient)
 		}
 	}()
 
@@ -113,7 +99,7 @@ func run() error { //nolint:funlen
 		defer grp.Done()
 		defer close(eventCh)
 		err := server.RunServer(ctx, func(w http.ResponseWriter, r *http.Request) {
-			server.HandleRedfishEvent(w, r, eventCh)
+			server.HandleRedfishEvent(w, r, infoState, eventCh)
 		})
 		if err != nil {
 			log.Printf("Error running server: %v", err)
@@ -123,17 +109,21 @@ func run() error { //nolint:funlen
 	for _, config := range nodeConfigs {
 		log.Printf("Monitoring node: %s", config.NodeName)
 
-		subscriptionID, err := redfishlib.CreateSubscription(destinationURL, &config, config.NodeName)
+		// Use cryptographically random token.
+		token := rand.Text()
+
+		subscriptionID, err := redfishlib.CreateSubscription(destinationURL, &config, token)
 		if err != nil {
 			return fmt.Errorf("failed to create event subscription: %w", err)
 		}
 
-		nodeInfoMapLock.Lock()
-		nodeInfoMap[config.NodeName] = node.NodeInfo{
+		infoState.Lock.Lock()
+		infoState.Infos[config.NodeName] = node.NodeInfo{
 			NodeConfig:     config,
 			SubscriptionID: subscriptionID,
 		}
-		nodeInfoMapLock.Unlock()
+		infoState.TokenToName[token] = config.NodeName
+		infoState.Lock.Unlock()
 
 		log.Printf("Created Redfish event subscription: %s", subscriptionID)
 	}

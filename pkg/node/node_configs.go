@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -22,6 +23,12 @@ type NodeConfig struct {
 type NodeInfo struct {
 	NodeConfig     NodeConfig
 	SubscriptionID string
+}
+
+type NodeInfoState struct {
+	Lock        sync.RWMutex
+	Infos       map[string]NodeInfo
+	TokenToName map[string]string
 }
 
 func GetNodesConfigFromFARConfig(client dynamic.Interface, namespace string, insecure bool) ([]NodeConfig, error) {

@@ -24,6 +24,11 @@ const (
 	shutdownTimeout   = 5
 )
 
+type Event struct {
+	RedfishEvent redfish.Event
+	NodeName     string
+}
+
 // RunServer starts an HTTP server on the provided address using the given handler.
 // It sets the read header timeout and performs a graceful shutdown when the context is canceled.
 func RunServer(ctx context.Context, handler http.HandlerFunc) error {
@@ -61,11 +66,22 @@ func RunServer(ctx context.Context, handler http.HandlerFunc) error {
 
 // HandleRedfishEvent decodes a Redfish Event from the request, validates its context,
 // and sends it to the provided channel.
-func HandleRedfishEvent(w http.ResponseWriter, r *http.Request, eventCh chan<- redfish.Event) {
+func HandleRedfishEvent(w http.ResponseWriter, r *http.Request, infoState *node.NodeInfoState, eventCh chan<- Event) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	// Limiting body to 1 MiB, so that a malicious request would not cause memory issues.
+	// We do this, because authentication token is stored in the body,
+	// and the request cannot be rejected based on headers only.
+	const maxBodySize = 1024 * 1024
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+	defer func() {
+		if err := r.Body.Close(); err != nil {
+			log.Printf("Error closing request body: %v", err)
+		}
+	}()
 
 	var event redfish.Event
 	decoder := json.NewDecoder(r.Body)
@@ -74,19 +90,27 @@ func HandleRedfishEvent(w http.ResponseWriter, r *http.Request, eventCh chan<- r
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
-	defer func() {
-		if err := r.Body.Close(); err != nil {
-			log.Printf("Error closing request body: %v", err)
-		}
-	}()
 
-	if !strings.HasPrefix(event.Context, common.EventContextPrefix) {
+	// The token is stored in the "Context" field in the request's body,
+	// because the supermicro servers do not support setting custom HTTP headers for event subscriptions.
+	token, hasPrefix := strings.CutPrefix(event.Context, common.EventContextPrefix)
+	if !hasPrefix {
 		log.Printf("Received event with invalid context: %q", event.Context)
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
 
-	eventCh <- event
+	nodeName, err := lookupNodeNameFromToken(token, infoState)
+	if err != nil {
+		log.Printf("Authorization error: %v", err)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	eventCh <- Event{
+		RedfishEvent: event,
+		NodeName:     nodeName,
+	}
 
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte("Event received")); err != nil {
@@ -94,8 +118,22 @@ func HandleRedfishEvent(w http.ResponseWriter, r *http.Request, eventCh chan<- r
 	}
 }
 
+func lookupNodeNameFromToken(token string, state *node.NodeInfoState) (string, error) {
+	state.Lock.RLock()
+	defer state.Lock.RUnlock()
+
+	nodeName, ok := state.TokenToName[token]
+	if !ok {
+		return "", errors.New("invalid token")
+	}
+
+	return nodeName, nil
+}
+
 // HandleEvent logs the event details and invokes updateNodeCondition when a matching event is detected.
-func HandleEvent(event *redfish.Event, k8sClient kubernetes.Interface, nodeName string) {
+func HandleEvent(serverEvent *Event, k8sClient kubernetes.Interface) {
+	event := serverEvent.RedfishEvent
+
 	log.Printf("Received Redfish event:")
 	log.Printf("  ID: %s", event.ID)
 	log.Printf("  Name: %s", event.Name)
@@ -112,11 +150,11 @@ func HandleEvent(event *redfish.Event, k8sClient kubernetes.Interface, nodeName 
 		log.Printf("    Timestamp: %s", ev.EventTimestamp)
 
 		if redfishlib.IsWatchdogResetEvent(ev.MessageID) {
-			log.Printf("Detected watchdog reset event, updating node condition for %s", nodeName)
-			if err := node.UpdateNodeCondition(k8sClient, nodeName); err != nil {
+			log.Printf("Detected watchdog reset event, updating node condition for %s", serverEvent.NodeName)
+			if err := node.UpdateNodeCondition(k8sClient, serverEvent.NodeName); err != nil {
 				log.Printf("Failed to update node condition: %v", err)
 			} else {
-				log.Printf("Successfully updated node condition for %s", nodeName)
+				log.Printf("Successfully updated node condition for %s", serverEvent.NodeName)
 			}
 		}
 	}
