@@ -37,11 +37,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/0xfelix/redfish-event-listener/pkg/common"
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
 	"github.com/0xfelix/redfish-event-listener/pkg/server"
 )
-
-const eventContextPrefix = "RedfishEventListener-"
 
 var _ = Describe("Redish event server", func() {
 	Context("handling functionality", func() {
@@ -51,7 +50,7 @@ var _ = Describe("Redish event server", func() {
 				rr := httptest.NewRecorder()
 				req := makeReq()
 
-				server.HandleRedfishEvent(rr, req, eventCh, eventContextPrefix)
+				server.HandleRedfishEvent(rr, req, eventCh)
 
 				Expect(rr.Code).To(Equal(expectedStatus))
 				Expect(eventCh).NotTo(Receive())
@@ -76,7 +75,7 @@ var _ = Describe("Redish event server", func() {
 
 		It("should accept valid event and forwards it on channel", func() {
 			ev := redfish.Event{
-				Context: eventContextPrefix + "node01",
+				Context: common.EventContextPrefix + "node01",
 				Events: []redfish.EventRecord{
 					{
 						EventID:        "1",
@@ -94,7 +93,7 @@ var _ = Describe("Redish event server", func() {
 			req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
 			rr := httptest.NewRecorder()
 
-			server.HandleRedfishEvent(rr, req, eventCh, eventContextPrefix)
+			server.HandleRedfishEvent(rr, req, eventCh)
 			Expect(rr.Code).To(Equal(http.StatusOK))
 
 			b, err := io.ReadAll(rr.Body)
@@ -120,7 +119,7 @@ var _ = Describe("Redish event server", func() {
 					},
 				)
 				ev := &redfish.Event{
-					Context: eventContextPrefix + nodeName,
+					Context: common.EventContextPrefix + nodeName,
 					Events: []redfish.EventRecord{
 						{
 							EventID:   "sub-1",

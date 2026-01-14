@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/0xfelix/redfish-event-listener/pkg/common"
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
 	redfishlib "github.com/0xfelix/redfish-event-listener/pkg/redfish"
 	"github.com/0xfelix/redfish-event-listener/pkg/server"
@@ -26,7 +27,6 @@ const (
 	envDestinationURL  = "DESTINATION_URL"
 	envPodNamespace    = "POD_NAMESPACE"
 	envRedfishInsecure = "REDFISH_INSECURE"
-	eventContextPrefix = "RedfishEventListener-"
 )
 
 func main() {
@@ -89,7 +89,7 @@ func run() error { //nolint:funlen
 	go func() {
 		defer grp.Done()
 		for event := range eventCh {
-			nodeName, ok := strings.CutPrefix(event.Context, eventContextPrefix)
+			nodeName, ok := strings.CutPrefix(event.Context, common.EventContextPrefix)
 			if !ok {
 				log.Printf("Event does not have valid context: %s", event.Context)
 				continue
@@ -113,7 +113,7 @@ func run() error { //nolint:funlen
 		defer grp.Done()
 		defer close(eventCh)
 		err := server.RunServer(ctx, func(w http.ResponseWriter, r *http.Request) {
-			server.HandleRedfishEvent(w, r, eventCh, eventContextPrefix)
+			server.HandleRedfishEvent(w, r, eventCh)
 		})
 		if err != nil {
 			log.Printf("Error running server: %v", err)
@@ -123,7 +123,7 @@ func run() error { //nolint:funlen
 	for _, config := range nodeConfigs {
 		log.Printf("Monitoring node: %s", config.NodeName)
 
-		subscriptionID, err := redfishlib.CreateSubscription(destinationURL, &config, eventContextPrefix+config.NodeName)
+		subscriptionID, err := redfishlib.CreateSubscription(destinationURL, &config, config.NodeName)
 		if err != nil {
 			return fmt.Errorf("failed to create event subscription: %w", err)
 		}
