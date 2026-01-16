@@ -13,6 +13,7 @@ import (
 
 	"github.com/0xfelix/redfish-event-listener/pkg/common"
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
+	"github.com/0xfelix/redfish-event-listener/pkg/redfish/wrapper"
 )
 
 func CreateRedfishClient(nodeConfig *node.NodeConfig) (*gofish.APIClient, error) {
@@ -39,31 +40,17 @@ func CreateSubscription(destinationURL string, nodeConfig *node.NodeConfig, toke
 		return "", fmt.Errorf("failed to get EventService: %w", err)
 	}
 
-	if err = removePreviousEventDestinations(service); err != nil {
+	return CreateSubscriptionFromService(destinationURL, wrapper.FromEventService(service), token)
+}
+
+func CreateSubscriptionFromService(destinationURL string, service wrapper.EventServiceWrapper, token string) (string, error) {
+	if err := removePreviousEventDestinations(service); err != nil {
 		return "", fmt.Errorf("failed to remove previous subscriptions: %w", err)
 	}
 
-	return createEventDestinationInstance(client, service, destinationURL, token)
-}
-
-func createEventDestinationInstance(client *gofish.APIClient, service *redfish.EventService,
-	destinationURL, token string,
-) (string, error) {
 	// We store the token in the context field, because not all redfish servers support the HttpHeaders field.
 	subContext := common.EventContextPrefix + token
-
-	// Do not use `deliveryRetryPolicy`, it does not work with HPE
-	uri, err := redfish.CreateEventDestinationInstance(
-		client, service.Subscriptions, destinationURL,
-		nil,
-		nil,
-		nil,
-		redfish.RedfishEventDestinationProtocol,
-		subContext,
-		"",
-		nil,
-	)
-
+	uri, err := service.CreateEventSubscription(destinationURL, subContext)
 	if err == nil {
 		return uri, nil
 	}
@@ -78,7 +65,7 @@ func createEventDestinationInstance(client *gofish.APIClient, service *redfish.E
 	return usePredefinedEventDestinationInstance(service, destinationURL, subContext)
 }
 
-func removePreviousEventDestinations(service *redfish.EventService) error {
+func removePreviousEventDestinations(service wrapper.EventServiceWrapper) error {
 	subs, err := service.GetEventSubscriptions()
 	if err != nil {
 		return fmt.Errorf("failed to get event subscriptions: %w", err)
@@ -97,7 +84,7 @@ func removePreviousEventDestinations(service *redfish.EventService) error {
 	return nil
 }
 
-func usePredefinedEventDestinationInstance(service *redfish.EventService, destinationURL, subContext string) (string, error) {
+func usePredefinedEventDestinationInstance(service wrapper.EventServiceWrapper, destinationURL, subContext string) (string, error) {
 	subscriptions, err := service.GetEventSubscriptions()
 	if err != nil {
 		return "", fmt.Errorf("failed to get event subscriptions: %w", err)
@@ -111,7 +98,7 @@ func usePredefinedEventDestinationInstance(service *redfish.EventService, destin
 	}
 
 	patch := supermicroPatch(destinationURL, subContext)
-	if err := service.Patch(freeEventSubscription.ODataID, patch); err != nil {
+	if err := service.PatchEventSubscription(freeEventSubscription.ODataID, patch); err != nil {
 		return "", fmt.Errorf("failed to patch event subscription: %w", err)
 	}
 
@@ -127,18 +114,8 @@ func getFreeEventSubscription(subscriptions []*redfish.EventDestination) *redfis
 	return nil
 }
 
-// eventDestinationPatch is a struct that contains fields that we want to send in the patch request.
-// It is simpler to send the patch directly, instead of using more complex code in the redfish library.
-type eventDestinationPatch struct {
-	Context     string                           `json:"Context,omitempty"`
-	Destination string                           `json:"Destination,omitempty"`
-	EventTypes  []redfish.EventType              `json:"EventTypes,omitempty"`
-	OEM         json.RawMessage                  `json:"Oem,omitempty"`
-	Protocol    redfish.EventDestinationProtocol `json:"Protocol,omitempty"`
-}
-
-func supermicroPatch(destinationURL, context string) *eventDestinationPatch {
-	return &eventDestinationPatch{
+func supermicroPatch(destinationURL, context string) *wrapper.EventDestinationPatch {
+	return &wrapper.EventDestinationPatch{
 		Context:     context,
 		Destination: destinationURL,
 		EventTypes:  []redfish.EventType{redfish.AlertEventType},
