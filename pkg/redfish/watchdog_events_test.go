@@ -1,16 +1,9 @@
 package redfish
 
 import (
-	"testing"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
-
-func TestIsAWatchdogResetEvent(t *testing.T) {
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "Watchdog Events Suite")
-}
 
 var _ = Describe("Watchdog Events", func() {
 	DescribeTable("IsAWatchdogResetEvent", func(messageID string, expected bool) {
