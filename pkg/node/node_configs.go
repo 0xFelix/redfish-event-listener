@@ -23,6 +23,8 @@ type NodeConfig struct {
 type NodeInfo struct {
 	NodeConfig     NodeConfig
 	SubscriptionID string
+	FarObjName     string
+	Token          string
 }
 
 type NodeInfoState struct {

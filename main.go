@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,10 +12,14 @@ import (
 	"sync"
 	"syscall"
 
-	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/0xfelix/redfish-event-listener/pkg/controllers/far"
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
 	redfishlib "github.com/0xfelix/redfish-event-listener/pkg/redfish"
 	"github.com/0xfelix/redfish-event-listener/pkg/server"
@@ -35,7 +39,13 @@ func main() {
 
 // Ignoring linter, because we will change this function in future PRs.
 func run() error { //nolint:funlen
-	k8sConfig, err := rest.InClusterConfig()
+	opts := zap.Options{}
+	opts.BindFlags(flag.CommandLine)
+	flag.Parse()
+
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	k8sConfig, err := ctrl.GetConfig()
 	if err != nil {
 		return fmt.Errorf("failed to get in-cluster config: %w", err)
 	}
@@ -44,18 +54,6 @@ func run() error { //nolint:funlen
 	if err != nil {
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
-
-	dynamicClient, err := dynamic.NewForConfig(k8sConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create dynamic Kubernetes client: %w", err)
-	}
-
-	nodeConfigs, err := node.GetNodesConfigFromFARConfig(dynamicClient, lookupEnv(envPodNamespace), lookupInsecure())
-	if err != nil {
-		return fmt.Errorf("failed read node configs: %w", err)
-	}
-
-	destinationURL := lookupEnv(envDestinationURL)
 
 	grp := sync.WaitGroup{}
 	defer grp.Wait()
@@ -94,6 +92,49 @@ func run() error { //nolint:funlen
 		}
 	}()
 
+	podNamespace := lookupEnv(envPodNamespace)
+
+	mgr, err := ctrl.NewManager(k8sConfig, ctrl.Options{
+		BaseContext: func() context.Context { return ctx },
+		Cache: cache.Options{
+			// Limiting watch to only certain resources.
+			// The controller will start informer for watched resources, so we don't need to add them manually.
+			ReaderFailOnMissingInformer: true,
+			// Watch only resources in the same namespace as the pod
+			DefaultNamespaces: map[string]cache.Config{
+				podNamespace: {},
+			},
+		},
+		Client: client.Options{
+			Cache: &client.CacheOptions{
+				// Configure the client to use cache for getting Unstructured objects.
+				// Other parts of the code already use the Informer in the Cache to watch Unstructured FAR templates.
+				// So the client can also use the cache.
+				Unstructured: true,
+			},
+		},
+		// Disabling metrics server
+		Metrics: metricsserver.Options{
+			BindAddress: "0",
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create controller manager: %w", err)
+	}
+
+	err = far.AddToManager(
+		podNamespace,
+		lookupInsecure(),
+		lookupEnv(envDestinationURL),
+		infoState,
+		redfishlib.CreateSubscription,
+		redfishlib.DeleteSubscription,
+		mgr,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to complete controller: %w", err)
+	}
+
 	grp.Add(1)
 	go func() {
 		defer grp.Done()
@@ -106,26 +147,8 @@ func run() error { //nolint:funlen
 		}
 	}()
 
-	for _, config := range nodeConfigs {
-		log.Printf("Monitoring node: %s", config.NodeName)
-
-		// Use cryptographically random token.
-		token := rand.Text()
-
-		subscriptionID, err := redfishlib.CreateSubscription(destinationURL, &config, token)
-		if err != nil {
-			return fmt.Errorf("failed to create event subscription: %w", err)
-		}
-
-		infoState.Lock.Lock()
-		infoState.Infos[config.NodeName] = node.NodeInfo{
-			NodeConfig:     config,
-			SubscriptionID: subscriptionID,
-		}
-		infoState.TokenToName[token] = config.NodeName
-		infoState.Lock.Unlock()
-
-		log.Printf("Created Redfish event subscription: %s", subscriptionID)
+	if err := mgr.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start manager: %w", err)
 	}
 
 	grp.Wait()
