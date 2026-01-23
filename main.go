@@ -12,15 +12,14 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/0xfelix/redfish-event-listener/pkg/node"
-	redfishlib "github.com/0xfelix/redfish-event-listener/pkg/redfish"
-	"github.com/0xfelix/redfish-event-listener/pkg/server"
-
 	"github.com/stmcginnis/gofish/redfish"
-
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	"github.com/0xfelix/redfish-event-listener/pkg/node"
+	redfishlib "github.com/0xfelix/redfish-event-listener/pkg/redfish"
+	"github.com/0xfelix/redfish-event-listener/pkg/server"
 )
 
 const (

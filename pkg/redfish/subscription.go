@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"reflect"
 
-	"github.com/0xfelix/redfish-event-listener/pkg/node"
-
 	"github.com/stmcginnis/gofish"
 	"github.com/stmcginnis/gofish/common"
 	"github.com/stmcginnis/gofish/redfish"
+
+	"github.com/0xfelix/redfish-event-listener/pkg/node"
 )
 
 var readWriteSubscriptionFields = []string{
