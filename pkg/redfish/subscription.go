@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"reflect"
 	"strings"
 
 	"github.com/stmcginnis/gofish"
@@ -15,17 +14,6 @@ import (
 	"github.com/0xfelix/redfish-event-listener/pkg/common"
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
 )
-
-var readWriteSubscriptionFields = []string{
-	"Context",
-	"DeliveryRetryPolicy",
-	"VerifyCertificate",
-	"Destination",
-	"EventTypes",
-	"Protocol",
-	"Oem",
-	"SubscriptionType",
-}
 
 func CreateRedfishClient(nodeConfig *node.NodeConfig) (*gofish.APIClient, error) {
 	config := gofish.ClientConfig{
@@ -121,13 +109,12 @@ func usePredefinedEventDestinationInstance(service *redfish.EventService, destin
 		return "", fmt.Errorf("failed to get a free event subscription")
 	}
 
-	modifiedEventSubscription := modifySupermicroEventSubscription(freeEventSubscription, destinationURL, subContext)
-
-	if err := updateEventSubscription(freeEventSubscription, modifiedEventSubscription); err != nil {
-		return "", fmt.Errorf("failed to update event subscription: %w", err)
+	patch := supermicroPatch(destinationURL, subContext)
+	if err := service.Patch(freeEventSubscription.ODataID, patch); err != nil {
+		return "", fmt.Errorf("failed to patch event subscription: %w", err)
 	}
 
-	return modifiedEventSubscription.ODataID, nil
+	return freeEventSubscription.ODataID, nil
 }
 
 func getFreeEventSubscription(subscriptions []*redfish.EventDestination) *redfish.EventDestination {
@@ -139,32 +126,24 @@ func getFreeEventSubscription(subscriptions []*redfish.EventDestination) *redfis
 	return nil
 }
 
-func modifySupermicroEventSubscription(
-	eventSubscription *redfish.EventDestination,
-	destinationURL,
-	subContext string,
-) *redfish.EventDestination {
-	// Create shallow copy of originalEventSubscription, only new values are
-	// assigned to fields below (top-level fields only)
-	newEventSubscription := *eventSubscription
-
-	newEventSubscription.Destination = destinationURL
-	newEventSubscription.Context = subContext
-	newEventSubscription.EventTypes = []redfish.EventType{redfish.AlertEventType}
-	newEventSubscription.Protocol = redfish.RedfishEventDestinationProtocol
-	newEventSubscription.OEM = json.RawMessage(
-		[]byte(`{"Supermicro": {"EnableSubscription": true}}`),
-	)
-	return &newEventSubscription
+// eventDestinationPatch is a struct that contains fields that we want to send in the patch request.
+// It is simpler to send the patch directly, instead of using more complex code in the redfish library.
+type eventDestinationPatch struct {
+	Context     string                           `json:"Context,omitempty"`
+	Destination string                           `json:"Destination,omitempty"`
+	EventTypes  []redfish.EventType              `json:"EventTypes,omitempty"`
+	OEM         json.RawMessage                  `json:"Oem,omitempty"`
+	Protocol    redfish.EventDestinationProtocol `json:"Protocol,omitempty"`
 }
 
-func updateEventSubscription(originalEventSubscription *redfish.EventDestination,
-	updatedEventSubscription *redfish.EventDestination,
-) error {
-	originalElement := reflect.ValueOf(originalEventSubscription).Elem()
-	currentElement := reflect.ValueOf(updatedEventSubscription).Elem()
-
-	return updatedEventSubscription.Entity.Update(originalElement, currentElement, readWriteSubscriptionFields)
+func supermicroPatch(destinationURL, context string) *eventDestinationPatch {
+	return &eventDestinationPatch{
+		Context:     context,
+		Destination: destinationURL,
+		EventTypes:  []redfish.EventType{redfish.AlertEventType},
+		OEM:         json.RawMessage(`{"Supermicro": {"EnableSubscription": true}}`),
+		Protocol:    redfish.RedfishEventDestinationProtocol,
+	}
 }
 
 func DeleteSubscription(subscriptionID string, nodeConfig *node.NodeConfig) error {
