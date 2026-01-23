@@ -10,12 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stmcginnis/gofish/redfish"
+	"k8s.io/client-go/kubernetes"
+
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
 	redfishlib "github.com/0xfelix/redfish-event-listener/pkg/redfish"
-
-	"github.com/stmcginnis/gofish/redfish"
-
-	"k8s.io/client-go/kubernetes"
 )
 
 const (
