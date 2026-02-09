@@ -150,13 +150,26 @@ var _ = Describe("Redish event server", func() {
 	})
 
 	Context("watchdog event handling", func() {
-		DescribeTable("should set or not set a node condition based on watchdog event",
+		DescribeTable("should set or not set a node condition and label based on watchdog event",
 			func(messageID string, expectCondition bool) {
 				const nodeName = "node-1"
+				transitionTime := metav1.Now()
 				cs := fake.NewClientset(
 					&corev1.Node{
 						ObjectMeta: metav1.ObjectMeta{
 							Name: nodeName,
+							Labels: map[string]string{
+								"test": "false",
+							},
+						},
+						Status: corev1.NodeStatus{
+							Conditions: []corev1.NodeCondition{
+								{
+									Type:               corev1.NodeReady,
+									Status:             corev1.ConditionFalse,
+									LastTransitionTime: transitionTime,
+								},
+							},
 						},
 					},
 				)
@@ -185,8 +198,14 @@ var _ = Describe("Redish event server", func() {
 				if expectCondition {
 					Expect(condition).NotTo(BeNil(), "expected TestCondition to be set for watchdog events")
 					Expect(condition.Status).To(Equal(corev1.ConditionFalse))
+
+					Expect(n.Labels).To(HaveKeyWithValue(node.WatchdogResetTimeLabel,
+						transitionTime.Time.Format(node.WatchdogResetTimeLabelFmt)))
+					// Make sure it does not delete other labels
+					Expect(n.Labels).To(HaveLen(2))
 				} else {
 					Expect(condition).To(BeNil(), "expected TestCondition to not be set for non-watchdog events")
+					Expect(n.Labels).NotTo(HaveKey(node.WatchdogResetTimeLabel))
 				}
 			},
 			Entry("should not set a node condition for non-watchdog events", "NOT_WATCHDOG", false),

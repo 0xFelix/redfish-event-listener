@@ -12,14 +12,19 @@ import (
 	"sync"
 	"syscall"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/0xfelix/redfish-event-listener/pkg/controllers/far"
+	nodecondition "github.com/0xfelix/redfish-event-listener/pkg/controllers/node_condition"
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
 	redfishlib "github.com/0xfelix/redfish-event-listener/pkg/redfish"
 	"github.com/0xfelix/redfish-event-listener/pkg/server"
@@ -94,6 +99,11 @@ func run() error { //nolint:funlen
 
 	podNamespace := lookupEnv(envPodNamespace)
 
+	nodeLabelSelector, err := createNodeLabelSelector()
+	if err != nil {
+		return err
+	}
+
 	mgr, err := ctrl.NewManager(k8sConfig, ctrl.Options{
 		BaseContext: func() context.Context { return ctx },
 		Cache: cache.Options{
@@ -103,6 +113,11 @@ func run() error { //nolint:funlen
 			// Watch only resources in the same namespace as the pod
 			DefaultNamespaces: map[string]cache.Config{
 				podNamespace: {},
+			},
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.Node{}: {
+					Label: nodeLabelSelector,
+				},
 			},
 		},
 		Client: client.Options{
@@ -122,17 +137,8 @@ func run() error { //nolint:funlen
 		return fmt.Errorf("failed to create controller manager: %w", err)
 	}
 
-	err = far.AddToManager(
-		podNamespace,
-		lookupInsecure(),
-		lookupEnv(envDestinationURL),
-		infoState,
-		redfishlib.CreateSubscription,
-		redfishlib.DeleteSubscription,
-		mgr,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to complete controller: %w", err)
+	if err := addControllersToManager(mgr, infoState); err != nil {
+		return fmt.Errorf("failed to add controllers to manager: %w", err)
 	}
 
 	grp.Add(1)
@@ -153,6 +159,34 @@ func run() error { //nolint:funlen
 
 	grp.Wait()
 
+	return nil
+}
+
+func createNodeLabelSelector() (labels.Selector, error) {
+	labelReq, err := labels.NewRequirement(node.WatchdogResetTimeLabel, selection.Exists, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create label requirement: %w", err)
+	}
+
+	return labels.NewSelector().Add(*labelReq), nil
+}
+
+func addControllersToManager(mgr manager.Manager, infoState *node.NodeInfoState) error {
+	if err := far.AddToManager(
+		lookupEnv(envPodNamespace),
+		lookupInsecure(),
+		lookupEnv(envDestinationURL),
+		infoState,
+		redfishlib.CreateSubscription,
+		redfishlib.DeleteSubscription,
+		mgr,
+	); err != nil {
+		return fmt.Errorf("failed to complete controller: %w", err)
+	}
+
+	if err := nodecondition.AddToManager(mgr); err != nil {
+		return fmt.Errorf("failed to add node condition controller: %w", err)
+	}
 	return nil
 }
 
