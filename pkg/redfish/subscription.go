@@ -44,8 +44,26 @@ func CreateSubscription(destinationURL string, nodeConfig *state.NodeConfig, tok
 }
 
 func CreateSubscriptionFromService(destinationURL string, service wrapper.EventServiceWrapper, token string) (string, error) {
-	if err := removePreviousEventDestinations(service); err != nil {
-		return "", fmt.Errorf("failed to remove previous subscriptions: %w", err)
+	subs, err := service.GetEventSubscriptions()
+	if err != nil {
+		return "", fmt.Errorf("failed to get event subscriptions: %w", err)
+	}
+
+	for _, sub := range subs {
+		foundToken, found := strings.CutPrefix(sub.Context, common.EventContextPrefix)
+		if !found {
+			continue
+		}
+
+		if foundToken == token {
+			// The subscription already exists. We don't need to create it again.
+			return sub.ODataID, nil
+		}
+
+		// Deleting subscription created previously with different token
+		if deletionErr := service.DeleteEventSubscription(sub.ODataID); deletionErr != nil {
+			return "", fmt.Errorf("failed to delete previous event subscription: %w", deletionErr)
+		}
 	}
 
 	// We store the token in the context field, because not all redfish servers support the HttpHeaders field.
@@ -63,25 +81,6 @@ func CreateSubscriptionFromService(destinationURL string, service wrapper.EventS
 	// Fallback, try to get the event subscriptions, in vendors such as SuperMicro H/X12 they have a set of
 	// predefined event subscriptions that are not created by the user
 	return usePredefinedEventDestinationInstance(service, destinationURL, subContext)
-}
-
-func removePreviousEventDestinations(service wrapper.EventServiceWrapper) error {
-	subs, err := service.GetEventSubscriptions()
-	if err != nil {
-		return fmt.Errorf("failed to get event subscriptions: %w", err)
-	}
-
-	for _, sub := range subs {
-		if !strings.HasPrefix(sub.Context, common.EventContextPrefix) {
-			continue
-		}
-
-		if err := service.DeleteEventSubscription(sub.ODataID); err != nil {
-			return fmt.Errorf("failed to delete event subscription: %w", err)
-		}
-	}
-
-	return nil
 }
 
 func usePredefinedEventDestinationInstance(service wrapper.EventServiceWrapper, destinationURL, subContext string) (string, error) {

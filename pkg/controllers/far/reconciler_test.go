@@ -11,11 +11,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/0xfelix/redfish-event-listener/pkg/controllers/far"
-	"github.com/0xfelix/redfish-event-listener/pkg/node"
 	state "github.com/0xfelix/redfish-event-listener/pkg/state/v1"
+	"github.com/0xfelix/redfish-event-listener/pkg/statemanager"
 )
 
 var _ = Describe("Reconciler", func() {
@@ -35,26 +36,28 @@ var _ = Describe("Reconciler", func() {
 	var (
 		fakeClient    client.Client
 		reconciler    reconcile.Reconciler
-		infoState     *node.NodeInfoState
+		stateMgr      *testStateManager
 		createSubFunc far.CreateSubscriptionFunc
 		deleteSubFunc far.DeleteSubscriptionFunc
 	)
 
 	BeforeEach(func() {
-		fakeClient = fake.NewFakeClient()
-		infoState = &node.NodeInfoState{
-			Subs:        make(map[string]state.Subscription),
-			TokenToName: make(map[string]string),
-		}
+		fakeClient = fake.NewClientBuilder().Build()
 		createSubFunc = nil
 		deleteSubFunc = nil
+		stateMgr = &testStateManager{
+			State: &state.State{
+				Version:       state.VersionV1,
+				Subscriptions: []state.Subscription{},
+			},
+		}
 
 		reconciler = far.NewReconciler(
 			namespace,
 			true,
 			destination,
 			fakeClient,
-			infoState,
+			stateMgr,
 			func(destinationURL string, nodeConfig *state.NodeConfig, authToken string) (string, error) {
 				if createSubFunc != nil {
 					return createSubFunc(destinationURL, nodeConfig, authToken)
@@ -80,8 +83,10 @@ var _ = Describe("Reconciler", func() {
 	})
 
 	It("should delete subscriptions when FAR template is deleted", func() {
-		addToInfoState(infoState, node1Name, sub1, farName, token1)
-		addToInfoState(infoState, node2Name, sub2, farName, token2)
+		stateMgr.State.Subscriptions = []state.Subscription{
+			createSubscription(node1Name, sub1, farName, token1),
+			createSubscription(node2Name, sub2, farName, token2),
+		}
 
 		deleted := []string{}
 		deleteSubFunc = func(subID string, _ *state.NodeConfig) error {
@@ -98,13 +103,14 @@ var _ = Describe("Reconciler", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(deleted).To(ConsistOf(sub1, sub2))
-		Expect(infoState.Subs).To(BeEmpty())
-		Expect(infoState.TokenToName).To(BeEmpty())
+		Expect(stateMgr.State.Subscriptions).To(BeEmpty())
 	})
 
 	DescribeTable("agent filtering",
 		func(agent string) {
-			addToInfoState(infoState, node1Name, sub1, farName, token1)
+			stateMgr.State.Subscriptions = []state.Subscription{
+				createSubscription(node1Name, sub1, farName, token1),
+			}
 
 			deleteCalled := false
 			deleteSubFunc = func(subID string, _ *state.NodeConfig) error {
@@ -126,8 +132,7 @@ var _ = Describe("Reconciler", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(deleteCalled).To(BeTrue())
-			Expect(infoState.Subs).To(BeEmpty())
-			Expect(infoState.TokenToName).To(BeEmpty())
+			Expect(stateMgr.State.Subscriptions).To(BeEmpty())
 		},
 		Entry("should skip FAR template without agent field", ""),
 		Entry("should skip FAR template with non-fence_ipmilan agent", "fence_other"),
@@ -169,7 +174,9 @@ var _ = Describe("Reconciler", func() {
 
 		DescribeTable("should skip nodes with missing",
 			func(invalidNode farNode) {
-				addToInfoState(infoState, node1Name, sub1, farName, token1)
+				stateMgr.State.Subscriptions = []state.Subscription{
+					createSubscription(node1Name, sub1, farName, token1),
+				}
 
 				var created []string
 				createSubFunc = func(_ string, cfg *state.NodeConfig, _ string) (string, error) {
@@ -201,8 +208,9 @@ var _ = Describe("Reconciler", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(created).To(ConsistOf(node3Name))
 				Expect(deleteCalled).To(BeTrue())
-				Expect(infoState.Subs).To(HaveLen(1))
-				Expect(infoState.Subs).To(HaveKey(node3Name))
+
+				Expect(stateMgr.State.Subscriptions).To(HaveLen(1))
+				Expect(stateMgr.State.Subscriptions[0].NodeConfig.NodeName).To(Equal(node3Name))
 			},
 			Entry("username", farNode{ip: "192.168.1.2", username: "", password: "pass"}),
 			Entry("password", farNode{ip: "192.168.1.2", username: "user", password: ""}),
@@ -233,15 +241,22 @@ var _ = Describe("Reconciler", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(created).To(ConsistOf(node1Name, node2Name))
 
-		Expect(infoState.Subs).To(HaveLen(2))
-		Expect(infoState.Subs).To(HaveKey(node1Name))
-		Expect(infoState.Subs).To(HaveKey(node2Name))
+		resultState := stateMgr.State
+		Expect(resultState.Subscriptions).To(HaveLen(2))
 
-		Expect(infoState.Subs[node1Name].FarTemplateName).To(Equal(farName))
-		Expect(infoState.Subs[node1Name].Token).NotTo(BeEmpty())
+		subsByNode := map[string]state.Subscription{}
+		for _, sub := range resultState.Subscriptions {
+			subsByNode[sub.NodeConfig.NodeName] = sub
+		}
 
-		Expect(infoState.Subs[node2Name].FarTemplateName).To(Equal(farName))
-		Expect(infoState.Subs[node2Name].Token).NotTo(BeEmpty())
+		Expect(subsByNode).To(HaveKey(node1Name))
+		Expect(subsByNode).To(HaveKey(node2Name))
+
+		Expect(subsByNode[node1Name].FarTemplateName).To(Equal(farName))
+		Expect(subsByNode[node1Name].Token).NotTo(BeEmpty())
+
+		Expect(subsByNode[node2Name].FarTemplateName).To(Equal(farName))
+		Expect(subsByNode[node2Name].Token).NotTo(BeEmpty())
 	})
 
 	It("should return error when subscription creation fails", func() {
@@ -263,13 +278,26 @@ var _ = Describe("Reconciler", func() {
 		})
 
 		Expect(err).To(MatchError(createErr))
-		Expect(infoState.Subs).To(BeEmpty())
+
+		resultState := stateMgr.State
+		Expect(resultState.Subscriptions).To(HaveLen(1))
+		Expect(resultState.Subscriptions[0].URI).To(BeEmpty())
 	})
 
 	Context("Subscription deletion", func() {
 		It("should delete subscriptions for nodes removed from FAR spec", func() {
-			addToInfoState(infoState, node1Name, sub1, farName, token1)
-			addToInfoState(infoState, node2Name, sub2, farName, token2)
+			stateMgr.State.Subscriptions = []state.Subscription{
+				createSubscription(node1Name, sub1, farName, token1),
+				createSubscription(node2Name, sub2, farName, token2),
+			}
+
+			createSubFunc = func(_ string, cfg *state.NodeConfig, _ string) (string, error) {
+				if cfg.NodeName == node1Name {
+					return sub1, nil
+				}
+				Fail("createSubscriptionFunc called for unexpected node: " + cfg.NodeName)
+				return "", nil
+			}
 
 			deleteSubFunc = func(subID string, _ *state.NodeConfig) error {
 				Expect(subID).To(Equal(sub2))
@@ -289,17 +317,21 @@ var _ = Describe("Reconciler", func() {
 			})
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(infoState.Subs).To(HaveLen(1))
-			Expect(infoState.Subs).To(HaveKey(node1Name))
-			Expect(infoState.TokenToName).To(HaveLen(1))
-			Expect(infoState.TokenToName).To(HaveKey(token1))
+
+			resultState := stateMgr.State
+			Expect(resultState.Subscriptions).To(HaveLen(1))
+			Expect(resultState.Subscriptions[0].NodeConfig.NodeName).To(Equal(node1Name))
+			Expect(resultState.Subscriptions[0].Token).To(Equal(token1))
 		})
 
 		It("should continue cleanup even if subscription deletion fails", func() {
-			addToInfoState(infoState, node1Name, sub1, farName, token1)
-			addToInfoState(infoState, node2Name, sub2, farName, token2)
+			stateMgr.State.Subscriptions = []state.Subscription{
+				createSubscription(node1Name, sub1, farName, token1),
+				createSubscription(node2Name, sub2, farName, token2),
+			}
 
-			infosLenBeforeDeletion := len(infoState.Subs)
+			initialState := stateMgr.State
+			infosLenBeforeDeletion := len(initialState.Subscriptions)
 
 			deleteErr := stderrors.New("delete failed")
 			deletionAttempts := 0
@@ -318,12 +350,13 @@ var _ = Describe("Reconciler", func() {
 
 			Expect(err).To(MatchError(deleteErr))
 			Expect(deletionAttempts).To(Equal(infosLenBeforeDeletion))
-			Expect(infoState.Subs).To(BeEmpty())
-			Expect(infoState.TokenToName).To(BeEmpty())
+			Expect(stateMgr.State.Subscriptions).To(BeEmpty())
 		})
 
 		It("should delete subscriptions when FAR template becomes irrelevant", func() {
-			addToInfoState(infoState, node1Name, sub1, farName, token1)
+			stateMgr.State.Subscriptions = []state.Subscription{
+				createSubscription(node1Name, sub1, farName, token1),
+			}
 
 			var deleteCalled bool
 			deleteSubFunc = func(subID string, _ *state.NodeConfig) error {
@@ -345,13 +378,13 @@ var _ = Describe("Reconciler", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(deleteCalled).To(BeTrue())
-			Expect(infoState.Subs).To(BeEmpty())
-			Expect(infoState.TokenToName).To(BeEmpty())
+
+			Expect(stateMgr.State.Subscriptions).To(BeEmpty())
 		})
 	})
 
 	Context("Authentication and configuration", func() {
-		It("should generate auth token and store in TokenToName mapping", func() {
+		It("should generate auth token and store in subscription", func() {
 			const testNodeName = "test-node"
 			createCalled := false
 			createSubFunc = func(_ string, cfg *state.NodeConfig, token string) (string, error) {
@@ -376,10 +409,11 @@ var _ = Describe("Reconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(createCalled).To(BeTrue())
 
-			nodeInfo := infoState.Subs[testNodeName]
-			Expect(nodeInfo.Token).NotTo(BeEmpty())
-			Expect(infoState.TokenToName).To(HaveKey(nodeInfo.Token))
-			Expect(infoState.TokenToName[nodeInfo.Token]).To(Equal(testNodeName))
+			resultState := stateMgr.State
+			Expect(resultState.Subscriptions).To(HaveLen(1))
+			sub := resultState.Subscriptions[0]
+			Expect(sub.Token).NotTo(BeEmpty())
+			Expect(sub.NodeConfig.NodeName).To(Equal(testNodeName))
 		})
 
 		It("should construct HTTPS URL from IP in node config", func() {
@@ -431,24 +465,26 @@ var _ = Describe("Reconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(created).To(ConsistOf(node1Name, node2Name))
 
-			Expect(infoState.TokenToName).To(HaveLen(2))
-			for nodeName, nodeInfo := range infoState.Subs {
-				Expect(nodeInfo.Token).NotTo(BeEmpty())
-				Expect(infoState.TokenToName).To(HaveKey(nodeInfo.Token))
-				Expect(infoState.TokenToName[nodeInfo.Token]).To(Equal(nodeName))
+			resultState := stateMgr.State
+			Expect(resultState.Subscriptions).To(HaveLen(2))
+
+			for _, sub := range resultState.Subscriptions {
+				Expect(sub.Token).NotTo(BeEmpty())
+				Expect(sub.NodeConfig.NodeName).To(Or(Equal(node1Name), Equal(node2Name)))
 			}
 		})
 	})
 })
 
-func addToInfoState(infoState *node.NodeInfoState, nodeName, subID, farName, token string) {
-	infoState.Subs[nodeName] = state.Subscription{
-		NodeConfig:      state.NodeConfig{NodeName: nodeName},
-		URI:             subID,
-		FarTemplateName: farName,
+func createSubscription(nodeName, uri, farTemplateName, token string) state.Subscription {
+	return state.Subscription{
+		NodeConfig: state.NodeConfig{
+			NodeName: nodeName,
+		},
+		URI:             uri,
+		FarTemplateName: farTemplateName,
 		Token:           token,
 	}
-	infoState.TokenToName[token] = nodeName
 }
 
 type farNode struct {
@@ -496,4 +532,30 @@ func farTemplate(name, namespace, agent string, nodes map[string]farNode) *unstr
 	}
 
 	return obj
+}
+
+type testStateManager struct {
+	State *state.State
+}
+
+var _ statemanager.StateManager = &testStateManager{}
+
+func (t *testStateManager) GetNodeNameForToken(_ string) (string, bool) {
+	Fail("unexpected call to GetNodeNameForToken")
+	return "", false
+}
+
+func (t *testStateManager) GetSubscriptions() []state.Subscription {
+	result := make([]state.Subscription, len(t.State.Subscriptions))
+	copy(result, t.State.Subscriptions)
+	return result
+}
+
+func (t *testStateManager) SetSubscriptions(subs []state.Subscription) {
+	t.State.Subscriptions = subs
+}
+
+func (t *testStateManager) AddToManager(_ manager.Manager) error {
+	Fail("unexpected call to AddToManager")
+	return nil
 }

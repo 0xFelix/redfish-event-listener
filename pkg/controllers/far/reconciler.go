@@ -6,15 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 
+	redfishcommon "github.com/stmcginnis/gofish/common"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/0xfelix/redfish-event-listener/pkg/node"
 	state "github.com/0xfelix/redfish-event-listener/pkg/state/v1"
+	"github.com/0xfelix/redfish-event-listener/pkg/statemanager"
 )
 
 func NewReconciler(
@@ -22,7 +24,7 @@ func NewReconciler(
 	insecure bool,
 	destinationURL string,
 	apiClient client.Client,
-	infoState *node.NodeInfoState,
+	stateManager statemanager.StateManager,
 	createSub CreateSubscriptionFunc,
 	deleteSub DeleteSubscriptionFunc,
 ) reconcile.Reconciler {
@@ -31,9 +33,9 @@ func NewReconciler(
 		insecure:               insecure,
 		destinationURL:         destinationURL,
 		client:                 apiClient,
+		stateManager:           stateManager,
 		createSubscriptionFunc: createSub,
 		deleteSubscriptionFunc: deleteSub,
-		infoState:              infoState,
 	}
 }
 
@@ -43,59 +45,61 @@ type farConfigReconciler struct {
 	destinationURL string
 
 	client                 client.Client
+	stateManager           statemanager.StateManager
 	createSubscriptionFunc CreateSubscriptionFunc
 	deleteSubscriptionFunc DeleteSubscriptionFunc
-
-	infoState *node.NodeInfoState
 }
 
 func (f *farConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	// Ignoring objects in other namespaces
 	if req.Namespace != f.namespace {
 		return ctrl.Result{}, nil
 	}
 
+	currentSubs := f.stateManager.GetSubscriptions()
+	newSubs, reconcileErr := f.reconcileTemplate(ctx, req, currentSubs)
+	f.stateManager.SetSubscriptions(newSubs)
+
+	return ctrl.Result{}, reconcileErr
+}
+
+func (f *farConfigReconciler) reconcileTemplate(
+	ctx context.Context,
+	req ctrl.Request,
+	currentSubs []state.Subscription,
+) ([]state.Subscription, error) {
 	farObj := NewFarTemplateUnstructured()
 	err := f.client.Get(ctx, req.NamespacedName, farObj)
 	if k8serrors.IsNotFound(err) {
 		// The FAR config was deleted. We need to remove subscriptions associated with it
-		if deletionErr := f.deleteSubscriptionsForObj(req.Name); deletionErr != nil {
-			return ctrl.Result{}, reconcile.TerminalError(deletionErr)
+		modifiedSubs, deletionErr := f.deleteSubscriptionsForObj(currentSubs, req.Name)
+		if deletionErr != nil {
+			return modifiedSubs, reconcile.TerminalError(deletionErr)
 		}
-		return ctrl.Result{}, nil
+		return modifiedSubs, nil
 	}
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to get FenceAgentsRemediationTemplate: %w", err)
+		return currentSubs, fmt.Errorf("failed to get FenceAgentsRemediationTemplate: %w", err)
 	}
 
 	isRelevant, err := isFarTemplateRelevant(farObj)
 	if err != nil {
-		return ctrl.Result{}, reconcile.TerminalError(err)
+		return currentSubs, reconcile.TerminalError(err)
 	}
 	if !isRelevant {
 		// Maybe the FAR template was relevant before, so we need to remove any existing subscriptions created from it.
-		if deletionErr := f.deleteSubscriptionsForObj(farObj.GetName()); deletionErr != nil {
-			return ctrl.Result{}, reconcile.TerminalError(deletionErr)
+		modifiedSubs, deletionErr := f.deleteSubscriptionsForObj(currentSubs, farObj.GetName())
+		if deletionErr != nil {
+			return modifiedSubs, reconcile.TerminalError(deletionErr)
 		}
-		return ctrl.Result{}, nil
+		return modifiedSubs, nil
 	}
 
 	nodeConfigs, err := nodeConfigsFromFar(farObj, f.insecure)
 	if err != nil {
-		return ctrl.Result{}, reconcile.TerminalError(fmt.Errorf("failed to parse FenceAgentsRemediationTemplate: %w", err))
+		return currentSubs, reconcile.TerminalError(fmt.Errorf("failed to parse FenceAgentsRemediationTemplate: %w", err))
 	}
 
-	configsByName := map[string]state.NodeConfig{}
-	for _, nodeConfig := range nodeConfigs {
-		name := nodeConfig.NodeName
-		configsByName[name] = nodeConfig
-	}
-
-	if err := f.updateSubscriptions(configsByName, farObj.GetName()); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update subscriptions: %w", err)
-	}
-
-	return ctrl.Result{}, nil
+	return f.updateSubscriptions(nodeConfigs, farObj.GetName(), currentSubs)
 }
 
 func isFarTemplateRelevant(obj *unstructured.Unstructured) (bool, error) {
@@ -117,93 +121,92 @@ func isFarTemplateRelevant(obj *unstructured.Unstructured) (bool, error) {
 	return true, nil
 }
 
-func (f *farConfigReconciler) updateSubscriptions(configsByName map[string]state.NodeConfig, farObjName string) error {
-	f.infoState.Lock.Lock()
-	defer f.infoState.Lock.Unlock()
-
+func (f *farConfigReconciler) updateSubscriptions(
+	nodeConfigsByName map[string]state.NodeConfig,
+	farObjName string,
+	currentSubs []state.Subscription,
+) ([]state.Subscription, error) {
+	result := make([]state.Subscription, 0, len(currentSubs))
 	var resultErrors []error
 
-	// Remove old subscriptions
-	for nodeName, nodeInfo := range f.infoState.Subs {
-		if nodeInfo.FarTemplateName != farObjName {
+	keepSubs := map[string]state.Subscription{}
+	for _, sub := range currentSubs {
+		if sub.FarTemplateName != farObjName {
+			result = append(result, sub)
 			continue
 		}
-		if _, ok := configsByName[nodeName]; ok {
+
+		if _, ok := nodeConfigsByName[sub.NodeConfig.NodeName]; !ok {
+			resultErrors = append(resultErrors, f.deleteSubscription(&sub))
 			continue
 		}
-		resultErrors = append(resultErrors, f.deleteSubscriptionLocked(&nodeInfo))
+		keepSubs[sub.NodeConfig.NodeName] = sub
 	}
 
-	// Create new subscriptions
-	for nodeName, config := range configsByName {
-		if _, exists := f.infoState.Subs[nodeName]; exists {
+	// Add new subscriptions to "keepSubs"
+	for _, config := range nodeConfigsByName {
+		if _, exists := keepSubs[config.NodeName]; exists {
 			continue
 		}
 
 		log.Printf("Monitoring node: %s", config.NodeName)
 
-		// Use cryptographically random token.
-		token := rand.Text()
+		keepSubs[config.NodeName] = state.Subscription{
+			NodeConfig:      config,
+			URI:             "",
+			FarTemplateName: farObjName,
+			// Use cryptographically random token.
+			Token: rand.Text(),
+		}
+	}
 
-		if err := f.createSubscriptionLocked(config, token, farObjName); err != nil {
+	for _, sub := range keepSubs {
+		// f.createSubscriptionFunc() does not add subscription to nodes where it already exists
+		subURI, err := f.createSubscriptionFunc(f.destinationURL, &sub.NodeConfig, sub.Token)
+		if err != nil {
+			resultErrors = append(resultErrors, fmt.Errorf("failed to create subscription for node %q: %w", sub.NodeConfig.NodeName, err))
+		} else {
+			sub.URI = subURI
+		}
+		result = append(result, sub)
+	}
+
+	return result, errors.Join(resultErrors...)
+}
+
+func (f *farConfigReconciler) deleteSubscriptionsForObj(currentSubs []state.Subscription, objName string) ([]state.Subscription, error) {
+	var result []state.Subscription
+	var resultErrors []error
+	for _, sub := range currentSubs {
+		if sub.FarTemplateName != objName {
+			result = append(result, sub)
+			continue
+		}
+
+		if err := f.deleteSubscription(&sub); err != nil {
 			resultErrors = append(resultErrors, err)
 		}
 	}
 
-	return errors.Join(resultErrors...)
+	return result, errors.Join(resultErrors...)
 }
 
-func (f *farConfigReconciler) deleteSubscriptionsForObj(objName string) error {
-	f.infoState.Lock.Lock()
-	defer f.infoState.Lock.Unlock()
-
-	var resultErrors []error
-	for _, nodeInfo := range f.infoState.Subs {
-		if nodeInfo.FarTemplateName == objName {
-			resultErrors = append(resultErrors, f.deleteSubscriptionLocked(&nodeInfo))
-		}
-	}
-
-	return errors.Join(resultErrors...)
-}
-
-func (f *farConfigReconciler) createSubscriptionLocked(config state.NodeConfig, token, farObjName string) error {
-	// This function assumes that write lock f.infoState.Lock() is held
-
-	subscriptionID, err := f.createSubscriptionFunc(f.destinationURL, &config, token)
-	if err != nil {
-		return fmt.Errorf("failed to create subscription for node %q: %w", config.NodeName, err)
-	}
-
-	f.infoState.Subs[config.NodeName] = state.Subscription{
-		NodeConfig:      config,
-		URI:             subscriptionID,
-		FarTemplateName: farObjName,
-		Token:           token,
-	}
-	f.infoState.TokenToName[token] = config.NodeName
-
-	log.Printf("Created Redfish event subscription: %s", subscriptionID)
-	return nil
-}
-
-func (f *farConfigReconciler) deleteSubscriptionLocked(sub *state.Subscription) error {
-	// This function assumes that write lock f.infoState.Lock() is held
-	var result error
+func (f *farConfigReconciler) deleteSubscription(sub *state.Subscription) error {
 	if sub.URI != "" {
 		log.Printf("Deleting Redfish event subscription: %s", sub.URI)
 		if err := f.deleteSubscriptionFunc(sub.URI, &sub.NodeConfig); err != nil {
-			result = fmt.Errorf("failed to delete subscription for node %q: %w", sub.NodeConfig.NodeName, err)
+			var redfishErr *redfishcommon.Error
+			if ok := errors.As(err, &redfishErr); ok && redfishErr.HTTPReturnedStatusCode == http.StatusNotFound {
+				// Subscription may have been already deleted
+				return nil
+			}
+			return fmt.Errorf("failed to delete subscription for node %q: %w", sub.NodeConfig.NodeName, err)
 		}
 	}
-	// The node is deleted from infoState, even if the subscription deletion above failed.
-	// In that case, the BMC will still try to send events, but this pod will ignore them.
-	delete(f.infoState.TokenToName, sub.Token)
-	delete(f.infoState.Subs, sub.NodeConfig.NodeName)
-	return result
+	return nil
 }
 
-func nodeConfigsFromFar(obj *unstructured.Unstructured, insecure bool) ([]state.NodeConfig, error) {
+func nodeConfigsFromFar(obj *unstructured.Unstructured, insecure bool) (map[string]state.NodeConfig, error) {
 	nodeParameters, found, err := unstructured.NestedMap(obj.Object, "spec", "template", "spec", "nodeparameters")
 	if !found {
 		return nil, fmt.Errorf("failed to find .spec.template.spec.nodeparameters")
@@ -234,7 +237,7 @@ func nodeConfigsFromFar(obj *unstructured.Unstructured, insecure bool) ([]state.
 		return nil, fmt.Errorf("error getting '--password' parameter: %w", err)
 	}
 
-	var nodeConfigs []state.NodeConfig
+	nodeConfigs := map[string]state.NodeConfig{}
 	for nodeName, ip := range ips {
 		user, ok := users[nodeName]
 		if !ok {
@@ -246,13 +249,18 @@ func nodeConfigsFromFar(obj *unstructured.Unstructured, insecure bool) ([]state.
 			log.Printf("FAR config does not specify password for node %q, ignoring the node.", nodeName)
 			continue
 		}
-		nodeConfigs = append(nodeConfigs, state.NodeConfig{
+		if _, ok = nodeConfigs[nodeName]; ok {
+			log.Printf("FAR config already contains node %q, ignoring the node.", nodeName)
+			continue
+		}
+
+		nodeConfigs[nodeName] = state.NodeConfig{
 			NodeName: nodeName,
 			URL:      fmt.Sprintf("https://%s", ip),
 			Username: user,
 			Password: password,
 			Insecure: insecure,
-		})
+		}
 	}
 
 	return nodeConfigs, nil
