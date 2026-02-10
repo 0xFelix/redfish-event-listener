@@ -46,6 +46,35 @@ var _ = Describe("CreateSubscriptionFromService", func() {
 		Expect(uri).To(Equal(testURI))
 	})
 
+	It("should not create a new subscription if it already exists with the same token", func() {
+		const existingURI = "existing-uri"
+		eventService.GetEventSubscriptionsFunc = func() ([]*redfish.EventDestination, error) {
+			return []*redfish.EventDestination{{
+				Entity:      redfishcommon.Entity{ODataID: existingURI},
+				Destination: destination,
+				Context:     common.EventContextPrefix + token,
+			}, {
+				Entity:      redfishcommon.Entity{ODataID: "uri-2"},
+				Destination: "different-destination",
+				Context:     "different-context",
+			}}, nil
+		}
+
+		eventService.CreateEventSubscriptionFunc = func(_, _ string) (string, error) {
+			Fail("CreateEventSubscription should not be called")
+			return "", nil
+		}
+
+		eventService.DeleteEventSubscriptionFunc = func(_ string) error {
+			Fail("DeleteEventSubscription should not be called")
+			return nil
+		}
+
+		uri, err := CreateSubscriptionFromService(destination, eventService, token)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(uri).To(Equal(existingURI))
+	})
+
 	It("should remove previous subscription, before creating new one", func() {
 		const uri1 = "uri-1"
 		eventService.GetEventSubscriptionsFunc = func() ([]*redfish.EventDestination, error) {

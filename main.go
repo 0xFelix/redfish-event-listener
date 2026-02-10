@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/client-go/kubernetes"
@@ -28,13 +29,16 @@ import (
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
 	redfishlib "github.com/0xfelix/redfish-event-listener/pkg/redfish"
 	"github.com/0xfelix/redfish-event-listener/pkg/server"
-	state "github.com/0xfelix/redfish-event-listener/pkg/state/v1"
+	"github.com/0xfelix/redfish-event-listener/pkg/statemanager"
 )
 
 const (
 	envDestinationURL  = "DESTINATION_URL"
 	envPodNamespace    = "POD_NAMESPACE"
 	envRedfishInsecure = "REDFISH_INSECURE"
+
+	// This name is also used in RBAC role to only allow access to single secret
+	secretName = "redfish-event-listener-state"
 )
 
 func main() {
@@ -64,24 +68,20 @@ func run() error { //nolint:funlen
 	grp := sync.WaitGroup{}
 	defer grp.Wait()
 
-	infoState := &node.NodeInfoState{
-		Subs:        map[string]state.Subscription{},
-		TokenToName: map[string]string{},
-	}
+	podNamespace := lookupEnv(envPodNamespace)
+
+	stateMgr := statemanager.New(secretName, podNamespace)
 
 	defer func() {
-		infoState.Lock.Lock()
-		defer infoState.Lock.Unlock()
-		for _, info := range infoState.Subs {
-			if info.URI != "" {
-				log.Printf("Deleting Redfish event subscription: %s", info.URI)
-				if delErr := redfishlib.DeleteSubscription(info.URI, &info.NodeConfig); delErr != nil {
+		subs := stateMgr.GetSubscriptions()
+		for _, sub := range subs {
+			if sub.URI != "" {
+				log.Printf("Deleting Redfish event subscription: %s", sub.URI)
+				if delErr := redfishlib.DeleteSubscription(sub.URI, &sub.NodeConfig); delErr != nil {
 					log.Print(delErr)
 				}
 			}
 		}
-		infoState.Subs = map[string]state.Subscription{}
-		infoState.TokenToName = map[string]string{}
 	}()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -97,8 +97,6 @@ func run() error { //nolint:funlen
 			server.HandleEvent(&event, k8sClient)
 		}
 	}()
-
-	podNamespace := lookupEnv(envPodNamespace)
 
 	nodeLabelSelector, err := createNodeLabelSelector()
 	if err != nil {
@@ -119,6 +117,12 @@ func run() error { //nolint:funlen
 				&corev1.Node{}: {
 					Label: nodeLabelSelector,
 				},
+				&corev1.Secret{}: {
+					Field: fields.SelectorFromSet(fields.Set{
+						"metadata.name":      secretName,
+						"metadata.namespace": podNamespace,
+					}),
+				},
 			},
 		},
 		Client: client.Options{
@@ -138,7 +142,11 @@ func run() error { //nolint:funlen
 		return fmt.Errorf("failed to create controller manager: %w", err)
 	}
 
-	if err := addControllersToManager(mgr, infoState); err != nil {
+	if err = stateMgr.AddToManager(mgr); err != nil {
+		return fmt.Errorf("failed to start state manager: %w", err)
+	}
+
+	if err = addControllersToManager(mgr, stateMgr); err != nil {
 		return fmt.Errorf("failed to add controllers to manager: %w", err)
 	}
 
@@ -147,7 +155,7 @@ func run() error { //nolint:funlen
 		defer grp.Done()
 		defer close(eventCh)
 		err := server.RunServer(ctx, func(w http.ResponseWriter, r *http.Request) {
-			server.HandleRedfishEvent(w, r, infoState, eventCh)
+			server.HandleRedfishEvent(w, r, stateMgr, eventCh)
 		})
 		if err != nil {
 			log.Printf("Error running server: %v", err)
@@ -172,12 +180,12 @@ func createNodeLabelSelector() (labels.Selector, error) {
 	return labels.NewSelector().Add(*labelReq), nil
 }
 
-func addControllersToManager(mgr manager.Manager, infoState *node.NodeInfoState) error {
+func addControllersToManager(mgr manager.Manager, stateMgr statemanager.StateManager) error {
 	if err := far.AddToManager(
 		lookupEnv(envPodNamespace),
 		lookupInsecure(),
 		lookupEnv(envDestinationURL),
-		infoState,
+		stateMgr,
 		redfishlib.CreateSubscription,
 		redfishlib.DeleteSubscription,
 		mgr,

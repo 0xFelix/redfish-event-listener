@@ -36,11 +36,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	"github.com/0xfelix/redfish-event-listener/pkg/common"
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
 	"github.com/0xfelix/redfish-event-listener/pkg/server"
 	state "github.com/0xfelix/redfish-event-listener/pkg/state/v1"
+	"github.com/0xfelix/redfish-event-listener/pkg/statemanager"
 )
 
 var _ = Describe("Redish event server", func() {
@@ -50,14 +52,11 @@ var _ = Describe("Redish event server", func() {
 			token    = "TESTTOKEN1235421"
 		)
 
-		var infoState *node.NodeInfoState
+		var stateMgr statemanager.StateManager
 
 		BeforeEach(func() {
-			infoState = &node.NodeInfoState{
-				Subs: map[string]state.Subscription{
-					nodeName: {},
-				},
-				TokenToName: map[string]string{
+			stateMgr = &testStateManager{
+				tokenToName: map[string]string{
 					token: nodeName,
 				},
 			}
@@ -69,7 +68,7 @@ var _ = Describe("Redish event server", func() {
 				rr := httptest.NewRecorder()
 				req := makeReq()
 
-				server.HandleRedfishEvent(rr, req, infoState, eventCh)
+				server.HandleRedfishEvent(rr, req, stateMgr, eventCh)
 
 				Expect(rr.Code).To(Equal(expectedStatus))
 				Expect(eventCh).NotTo(Receive())
@@ -135,7 +134,7 @@ var _ = Describe("Redish event server", func() {
 			req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
 			rr := httptest.NewRecorder()
 
-			server.HandleRedfishEvent(rr, req, infoState, eventCh)
+			server.HandleRedfishEvent(rr, req, stateMgr, eventCh)
 			Expect(rr.Code).To(Equal(http.StatusOK))
 
 			b, err := io.ReadAll(rr.Body)
@@ -221,5 +220,30 @@ func getNodeCondition(conditions []corev1.NodeCondition, conditionType string) *
 			return &c
 		}
 	}
+	return nil
+}
+
+type testStateManager struct {
+	tokenToName map[string]string
+}
+
+var _ statemanager.StateManager = &testStateManager{}
+
+func (t *testStateManager) GetNodeNameForToken(token string) (string, bool) {
+	nodeName, ok := t.tokenToName[token]
+	return nodeName, ok
+}
+
+func (t *testStateManager) GetSubscriptions() []state.Subscription {
+	Fail("unexpected call to GetSubscriptions")
+	return nil
+}
+
+func (t *testStateManager) SetSubscriptions(_ []state.Subscription) {
+	Fail("unexpected call to SetSubscriptions")
+}
+
+func (t *testStateManager) AddToManager(_ manager.Manager) error {
+	Fail("unexpected call to AddToManager")
 	return nil
 }

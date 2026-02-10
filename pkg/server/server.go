@@ -16,6 +16,7 @@ import (
 	"github.com/0xfelix/redfish-event-listener/pkg/common"
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
 	redfishlib "github.com/0xfelix/redfish-event-listener/pkg/redfish"
+	"github.com/0xfelix/redfish-event-listener/pkg/statemanager"
 )
 
 const (
@@ -66,7 +67,7 @@ func RunServer(ctx context.Context, handler http.HandlerFunc) error {
 
 // HandleRedfishEvent decodes a Redfish Event from the request, validates its context,
 // and sends it to the provided channel.
-func HandleRedfishEvent(w http.ResponseWriter, r *http.Request, infoState *node.NodeInfoState, eventCh chan<- Event) {
+func HandleRedfishEvent(w http.ResponseWriter, r *http.Request, stateMgr statemanager.StateManager, eventCh chan<- Event) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -100,9 +101,9 @@ func HandleRedfishEvent(w http.ResponseWriter, r *http.Request, infoState *node.
 		return
 	}
 
-	nodeName, err := lookupNodeNameFromToken(token, infoState)
-	if err != nil {
-		log.Printf("Authorization error: %v", err)
+	nodeName, ok := stateMgr.GetNodeNameForToken(token)
+	if !ok {
+		log.Printf("Authorization error: invalid token")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -116,18 +117,6 @@ func HandleRedfishEvent(w http.ResponseWriter, r *http.Request, infoState *node.
 	if _, err := w.Write([]byte("Event received")); err != nil {
 		log.Printf("Error writing response: %v", err)
 	}
-}
-
-func lookupNodeNameFromToken(token string, state *node.NodeInfoState) (string, error) {
-	state.Lock.RLock()
-	defer state.Lock.RUnlock()
-
-	nodeName, ok := state.TokenToName[token]
-	if !ok {
-		return "", errors.New("invalid token")
-	}
-
-	return nodeName, nil
 }
 
 // HandleEvent logs the event details and invokes updateNodeCondition when a matching event is detected.

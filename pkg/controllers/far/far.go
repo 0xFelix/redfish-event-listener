@@ -1,13 +1,20 @@
 package far
 
 import (
+	"log"
+	"reflect"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
-	"github.com/0xfelix/redfish-event-listener/pkg/node"
 	state "github.com/0xfelix/redfish-event-listener/pkg/state/v1"
+	"github.com/0xfelix/redfish-event-listener/pkg/statemanager"
 )
 
 type (
@@ -33,7 +40,7 @@ func AddToManager(
 	namespace string,
 	insecure bool,
 	destinationURL string,
-	infoState *node.NodeInfoState,
+	stateManager statemanager.StateManager,
 	createSub CreateSubscriptionFunc,
 	deleteSub DeleteSubscriptionFunc,
 	mgr manager.Manager,
@@ -43,7 +50,7 @@ func AddToManager(
 		insecure,
 		destinationURL,
 		mgr.GetClient(),
-		infoState,
+		stateManager,
 		createSub,
 		deleteSub,
 	)
@@ -51,6 +58,41 @@ func AddToManager(
 	farTemplate := NewFarTemplateUnstructured()
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(farTemplate).
+		For(farTemplate, builder.WithPredicates(&specChangedPredicate{})).
+		WithOptions(controller.Options{
+			// The current implementation of Reconcile is not thread-safe.
+			MaxConcurrentReconciles: 1,
+		}).
 		Complete(reconciler)
+}
+
+type specChangedPredicate struct {
+	predicate.Funcs
+}
+
+var _ predicate.Predicate = &specChangedPredicate{}
+
+func (s *specChangedPredicate) Update(e event.UpdateEvent) bool {
+	oldFarTemplate, ok := e.ObjectOld.(*unstructured.Unstructured)
+	if !ok {
+		log.Printf("Unexpected event type: %T", e.ObjectOld)
+		return false
+	}
+
+	newFarTemplate, ok := e.ObjectNew.(*unstructured.Unstructured)
+	if !ok {
+		log.Printf("Unexpected event type: %T", e.ObjectNew)
+		return false
+	}
+
+	oldSpec, oldSpecExists := oldFarTemplate.Object["spec"]
+	newSpec, newSpecExists := newFarTemplate.Object["spec"]
+
+	if !oldSpecExists && !newSpecExists {
+		return false
+	}
+	if oldSpecExists != newSpecExists {
+		return true
+	}
+	return !reflect.DeepEqual(oldSpec, newSpec)
 }

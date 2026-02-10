@@ -32,3 +32,31 @@ subjects:
 - kind: ServiceAccount
   name: redfish-event-listener
   namespace: REPLACE_WITH_FAR_NAMESPACE
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: redfish-event-listener
+  namespace: REPLACE_WITH_FAR_NAMESPACE
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["redfish-event-listener-state"]
+  verbs: ["get", "list", "watch", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: redfish-event-listener
+  namespace: REPLACE_WITH_FAR_NAMESPACE
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: redfish-event-listener
+subjects:
+- kind: ServiceAccount
+  name: redfish-event-listener
+  namespace: REPLACE_WITH_FAR_NAMESPACE
