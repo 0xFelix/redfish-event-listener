@@ -42,6 +42,9 @@ GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 GOFUMPT ?= $(LOCALBIN)/gofumpt
 
 ## Tool Versions
+.PHONY: build
+build: $(LOCALBIN)
+	go build -o $(LOCALBIN)/redfish-event-listener main.go
 
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCI_LINT) ## Install golangci-lint locally if necessary.
