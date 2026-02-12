@@ -61,3 +61,17 @@ jobs:
 
       - name: Run linter
         run: make lint
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Golang
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Run build
+        run: make build
