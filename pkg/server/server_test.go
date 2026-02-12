@@ -40,6 +40,7 @@ import (
 	"github.com/0xfelix/redfish-event-listener/pkg/common"
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
 	"github.com/0xfelix/redfish-event-listener/pkg/server"
+	state "github.com/0xfelix/redfish-event-listener/pkg/state/v1"
 )
 
 var _ = Describe("Redish event server", func() {
@@ -53,7 +54,7 @@ var _ = Describe("Redish event server", func() {
 
 		BeforeEach(func() {
 			infoState = &node.NodeInfoState{
-				Infos: map[string]node.NodeInfo{
+				Subs: map[string]state.Subscription{
 					nodeName: {},
 				},
 				TokenToName: map[string]string{

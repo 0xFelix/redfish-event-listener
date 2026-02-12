@@ -28,6 +28,7 @@ import (
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
 	redfishlib "github.com/0xfelix/redfish-event-listener/pkg/redfish"
 	"github.com/0xfelix/redfish-event-listener/pkg/server"
+	state "github.com/0xfelix/redfish-event-listener/pkg/state/v1"
 )
 
 const (
@@ -64,22 +65,22 @@ func run() error { //nolint:funlen
 	defer grp.Wait()
 
 	infoState := &node.NodeInfoState{
-		Infos:       map[string]node.NodeInfo{},
+		Subs:        map[string]state.Subscription{},
 		TokenToName: map[string]string{},
 	}
 
 	defer func() {
 		infoState.Lock.Lock()
 		defer infoState.Lock.Unlock()
-		for _, info := range infoState.Infos {
-			if info.SubscriptionID != "" {
-				log.Printf("Deleting Redfish event subscription: %s", info.SubscriptionID)
-				if delErr := redfishlib.DeleteSubscription(info.SubscriptionID, &info.NodeConfig); delErr != nil {
+		for _, info := range infoState.Subs {
+			if info.URI != "" {
+				log.Printf("Deleting Redfish event subscription: %s", info.URI)
+				if delErr := redfishlib.DeleteSubscription(info.URI, &info.NodeConfig); delErr != nil {
 					log.Print(delErr)
 				}
 			}
 		}
-		infoState.Infos = map[string]node.NodeInfo{}
+		infoState.Subs = map[string]state.Subscription{}
 		infoState.TokenToName = map[string]string{}
 	}()
 

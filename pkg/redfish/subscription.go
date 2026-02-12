@@ -12,11 +12,11 @@ import (
 	"github.com/stmcginnis/gofish/redfish"
 
 	"github.com/0xfelix/redfish-event-listener/pkg/common"
-	"github.com/0xfelix/redfish-event-listener/pkg/node"
 	"github.com/0xfelix/redfish-event-listener/pkg/redfish/wrapper"
+	state "github.com/0xfelix/redfish-event-listener/pkg/state/v1"
 )
 
-func CreateRedfishClient(nodeConfig *node.NodeConfig) (*gofish.APIClient, error) {
+func CreateRedfishClient(nodeConfig *state.NodeConfig) (*gofish.APIClient, error) {
 	config := gofish.ClientConfig{
 		Endpoint:  nodeConfig.URL,
 		Username:  nodeConfig.Username,
@@ -28,7 +28,7 @@ func CreateRedfishClient(nodeConfig *node.NodeConfig) (*gofish.APIClient, error)
 	return gofish.Connect(config)
 }
 
-func CreateSubscription(destinationURL string, nodeConfig *node.NodeConfig, token string) (string, error) {
+func CreateSubscription(destinationURL string, nodeConfig *state.NodeConfig, token string) (string, error) {
 	client, err := CreateRedfishClient(nodeConfig)
 	if err != nil {
 		return "", fmt.Errorf("failed to create Redfish client: %w", err)
@@ -124,7 +124,7 @@ func supermicroPatch(destinationURL, context string) *wrapper.EventDestinationPa
 	}
 }
 
-func DeleteSubscription(subscriptionID string, nodeConfig *node.NodeConfig) error {
+func DeleteSubscription(subscriptionID string, nodeConfig *state.NodeConfig) error {
 	client, err := CreateRedfishClient(nodeConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create Redfish client: %w", err)
