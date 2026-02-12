@@ -15,6 +15,7 @@ import (
 
 	"github.com/0xfelix/redfish-event-listener/pkg/controllers/far"
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
+	state "github.com/0xfelix/redfish-event-listener/pkg/state/v1"
 )
 
 var _ = Describe("Reconciler", func() {
@@ -42,7 +43,7 @@ var _ = Describe("Reconciler", func() {
 	BeforeEach(func() {
 		fakeClient = fake.NewFakeClient()
 		infoState = &node.NodeInfoState{
-			Infos:       make(map[string]node.NodeInfo),
+			Subs:        make(map[string]state.Subscription),
 			TokenToName: make(map[string]string),
 		}
 		createSubFunc = nil
@@ -54,14 +55,14 @@ var _ = Describe("Reconciler", func() {
 			destination,
 			fakeClient,
 			infoState,
-			func(destinationURL string, nodeConfig *node.NodeConfig, authToken string) (string, error) {
+			func(destinationURL string, nodeConfig *state.NodeConfig, authToken string) (string, error) {
 				if createSubFunc != nil {
 					return createSubFunc(destinationURL, nodeConfig, authToken)
 				}
 				Fail("createSubscriptionFunc should not be called")
 				return "", nil
 			},
-			func(subscriptionURI string, nodeConfig *node.NodeConfig) error {
+			func(subscriptionURI string, nodeConfig *state.NodeConfig) error {
 				if deleteSubFunc != nil {
 					return deleteSubFunc(subscriptionURI, nodeConfig)
 				}
@@ -83,7 +84,7 @@ var _ = Describe("Reconciler", func() {
 		addToInfoState(infoState, node2Name, sub2, farName, token2)
 
 		deleted := []string{}
-		deleteSubFunc = func(subID string, _ *node.NodeConfig) error {
+		deleteSubFunc = func(subID string, _ *state.NodeConfig) error {
 			deleted = append(deleted, subID)
 			return nil
 		}
@@ -97,7 +98,7 @@ var _ = Describe("Reconciler", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(deleted).To(ConsistOf(sub1, sub2))
-		Expect(infoState.Infos).To(BeEmpty())
+		Expect(infoState.Subs).To(BeEmpty())
 		Expect(infoState.TokenToName).To(BeEmpty())
 	})
 
@@ -106,7 +107,7 @@ var _ = Describe("Reconciler", func() {
 			addToInfoState(infoState, node1Name, sub1, farName, token1)
 
 			deleteCalled := false
-			deleteSubFunc = func(subID string, _ *node.NodeConfig) error {
+			deleteSubFunc = func(subID string, _ *state.NodeConfig) error {
 				Expect(subID).To(Equal(sub1))
 				deleteCalled = true
 				return nil
@@ -125,7 +126,7 @@ var _ = Describe("Reconciler", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(deleteCalled).To(BeTrue())
-			Expect(infoState.Infos).To(BeEmpty())
+			Expect(infoState.Subs).To(BeEmpty())
 			Expect(infoState.TokenToName).To(BeEmpty())
 		},
 		Entry("should skip FAR template without agent field", ""),
@@ -171,13 +172,13 @@ var _ = Describe("Reconciler", func() {
 				addToInfoState(infoState, node1Name, sub1, farName, token1)
 
 				var created []string
-				createSubFunc = func(_ string, cfg *node.NodeConfig, _ string) (string, error) {
+				createSubFunc = func(_ string, cfg *state.NodeConfig, _ string) (string, error) {
 					created = append(created, cfg.NodeName)
 					return "sub-" + cfg.NodeName, nil
 				}
 
 				var deleteCalled bool
-				deleteSubFunc = func(subID string, _ *node.NodeConfig) error {
+				deleteSubFunc = func(subID string, _ *state.NodeConfig) error {
 					Expect(subID).To(Equal(sub1))
 					deleteCalled = true
 					return nil
@@ -200,8 +201,8 @@ var _ = Describe("Reconciler", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(created).To(ConsistOf(node3Name))
 				Expect(deleteCalled).To(BeTrue())
-				Expect(infoState.Infos).To(HaveLen(1))
-				Expect(infoState.Infos).To(HaveKey(node3Name))
+				Expect(infoState.Subs).To(HaveLen(1))
+				Expect(infoState.Subs).To(HaveKey(node3Name))
 			},
 			Entry("username", farNode{ip: "192.168.1.2", username: "", password: "pass"}),
 			Entry("password", farNode{ip: "192.168.1.2", username: "user", password: ""}),
@@ -210,7 +211,7 @@ var _ = Describe("Reconciler", func() {
 
 	It("should create subscriptions", func() {
 		var created []string
-		createSubFunc = func(_ string, cfg *node.NodeConfig, token string) (string, error) {
+		createSubFunc = func(_ string, cfg *state.NodeConfig, token string) (string, error) {
 			created = append(created, cfg.NodeName)
 			Expect(token).NotTo(BeEmpty())
 			return "sub-" + cfg.NodeName, nil
@@ -232,20 +233,20 @@ var _ = Describe("Reconciler", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(created).To(ConsistOf(node1Name, node2Name))
 
-		Expect(infoState.Infos).To(HaveLen(2))
-		Expect(infoState.Infos).To(HaveKey(node1Name))
-		Expect(infoState.Infos).To(HaveKey(node2Name))
+		Expect(infoState.Subs).To(HaveLen(2))
+		Expect(infoState.Subs).To(HaveKey(node1Name))
+		Expect(infoState.Subs).To(HaveKey(node2Name))
 
-		Expect(infoState.Infos[node1Name].FarObjName).To(Equal(farName))
-		Expect(infoState.Infos[node1Name].Token).NotTo(BeEmpty())
+		Expect(infoState.Subs[node1Name].FarTemplateName).To(Equal(farName))
+		Expect(infoState.Subs[node1Name].Token).NotTo(BeEmpty())
 
-		Expect(infoState.Infos[node2Name].FarObjName).To(Equal(farName))
-		Expect(infoState.Infos[node2Name].Token).NotTo(BeEmpty())
+		Expect(infoState.Subs[node2Name].FarTemplateName).To(Equal(farName))
+		Expect(infoState.Subs[node2Name].Token).NotTo(BeEmpty())
 	})
 
 	It("should return error when subscription creation fails", func() {
 		createErr := stderrors.New("subscription creation failed")
-		createSubFunc = func(string, *node.NodeConfig, string) (string, error) {
+		createSubFunc = func(string, *state.NodeConfig, string) (string, error) {
 			return "", createErr
 		}
 
@@ -262,7 +263,7 @@ var _ = Describe("Reconciler", func() {
 		})
 
 		Expect(err).To(MatchError(createErr))
-		Expect(infoState.Infos).To(BeEmpty())
+		Expect(infoState.Subs).To(BeEmpty())
 	})
 
 	Context("Subscription deletion", func() {
@@ -270,7 +271,7 @@ var _ = Describe("Reconciler", func() {
 			addToInfoState(infoState, node1Name, sub1, farName, token1)
 			addToInfoState(infoState, node2Name, sub2, farName, token2)
 
-			deleteSubFunc = func(subID string, _ *node.NodeConfig) error {
+			deleteSubFunc = func(subID string, _ *state.NodeConfig) error {
 				Expect(subID).To(Equal(sub2))
 				return nil
 			}
@@ -288,8 +289,8 @@ var _ = Describe("Reconciler", func() {
 			})
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(infoState.Infos).To(HaveLen(1))
-			Expect(infoState.Infos).To(HaveKey(node1Name))
+			Expect(infoState.Subs).To(HaveLen(1))
+			Expect(infoState.Subs).To(HaveKey(node1Name))
 			Expect(infoState.TokenToName).To(HaveLen(1))
 			Expect(infoState.TokenToName).To(HaveKey(token1))
 		})
@@ -298,11 +299,11 @@ var _ = Describe("Reconciler", func() {
 			addToInfoState(infoState, node1Name, sub1, farName, token1)
 			addToInfoState(infoState, node2Name, sub2, farName, token2)
 
-			infosLenBeforeDeletion := len(infoState.Infos)
+			infosLenBeforeDeletion := len(infoState.Subs)
 
 			deleteErr := stderrors.New("delete failed")
 			deletionAttempts := 0
-			deleteSubFunc = func(subID string, _ *node.NodeConfig) error {
+			deleteSubFunc = func(subID string, _ *state.NodeConfig) error {
 				deletionAttempts++
 				return deleteErr
 			}
@@ -317,7 +318,7 @@ var _ = Describe("Reconciler", func() {
 
 			Expect(err).To(MatchError(deleteErr))
 			Expect(deletionAttempts).To(Equal(infosLenBeforeDeletion))
-			Expect(infoState.Infos).To(BeEmpty())
+			Expect(infoState.Subs).To(BeEmpty())
 			Expect(infoState.TokenToName).To(BeEmpty())
 		})
 
@@ -325,7 +326,7 @@ var _ = Describe("Reconciler", func() {
 			addToInfoState(infoState, node1Name, sub1, farName, token1)
 
 			var deleteCalled bool
-			deleteSubFunc = func(subID string, _ *node.NodeConfig) error {
+			deleteSubFunc = func(subID string, _ *state.NodeConfig) error {
 				Expect(subID).To(Equal(sub1))
 				deleteCalled = true
 				return nil
@@ -344,7 +345,7 @@ var _ = Describe("Reconciler", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(deleteCalled).To(BeTrue())
-			Expect(infoState.Infos).To(BeEmpty())
+			Expect(infoState.Subs).To(BeEmpty())
 			Expect(infoState.TokenToName).To(BeEmpty())
 		})
 	})
@@ -353,7 +354,7 @@ var _ = Describe("Reconciler", func() {
 		It("should generate auth token and store in TokenToName mapping", func() {
 			const testNodeName = "test-node"
 			createCalled := false
-			createSubFunc = func(_ string, cfg *node.NodeConfig, token string) (string, error) {
+			createSubFunc = func(_ string, cfg *state.NodeConfig, token string) (string, error) {
 				Expect(cfg.NodeName).To(Equal(testNodeName))
 				Expect(token).NotTo(BeEmpty())
 				createCalled = true
@@ -375,7 +376,7 @@ var _ = Describe("Reconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(createCalled).To(BeTrue())
 
-			nodeInfo := infoState.Infos[testNodeName]
+			nodeInfo := infoState.Subs[testNodeName]
 			Expect(nodeInfo.Token).NotTo(BeEmpty())
 			Expect(infoState.TokenToName).To(HaveKey(nodeInfo.Token))
 			Expect(infoState.TokenToName[nodeInfo.Token]).To(Equal(testNodeName))
@@ -384,7 +385,7 @@ var _ = Describe("Reconciler", func() {
 		It("should construct HTTPS URL from IP in node config", func() {
 			const testIP = "192.168.1.100"
 			createCalled := false
-			createSubFunc = func(_ string, cfg *node.NodeConfig, _ string) (string, error) {
+			createSubFunc = func(_ string, cfg *state.NodeConfig, _ string) (string, error) {
 				Expect(cfg.URL).To(Equal("https://" + testIP))
 				createCalled = true
 				return "sub-" + cfg.NodeName, nil
@@ -408,7 +409,7 @@ var _ = Describe("Reconciler", func() {
 
 		It("should store tokens for all created nodes", func() {
 			var created []string
-			createSubFunc = func(_ string, cfg *node.NodeConfig, token string) (string, error) {
+			createSubFunc = func(_ string, cfg *state.NodeConfig, token string) (string, error) {
 				Expect(token).NotTo(BeEmpty())
 				created = append(created, cfg.NodeName)
 				return "sub-" + cfg.NodeName, nil
@@ -431,7 +432,7 @@ var _ = Describe("Reconciler", func() {
 			Expect(created).To(ConsistOf(node1Name, node2Name))
 
 			Expect(infoState.TokenToName).To(HaveLen(2))
-			for nodeName, nodeInfo := range infoState.Infos {
+			for nodeName, nodeInfo := range infoState.Subs {
 				Expect(nodeInfo.Token).NotTo(BeEmpty())
 				Expect(infoState.TokenToName).To(HaveKey(nodeInfo.Token))
 				Expect(infoState.TokenToName[nodeInfo.Token]).To(Equal(nodeName))
@@ -441,11 +442,11 @@ var _ = Describe("Reconciler", func() {
 })
 
 func addToInfoState(infoState *node.NodeInfoState, nodeName, subID, farName, token string) {
-	infoState.Infos[nodeName] = node.NodeInfo{
-		NodeConfig:     node.NodeConfig{NodeName: nodeName},
-		SubscriptionID: subID,
-		FarObjName:     farName,
-		Token:          token,
+	infoState.Subs[nodeName] = state.Subscription{
+		NodeConfig:      state.NodeConfig{NodeName: nodeName},
+		URI:             subID,
+		FarTemplateName: farName,
+		Token:           token,
 	}
 	infoState.TokenToName[token] = nodeName
 }

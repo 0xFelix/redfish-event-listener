@@ -7,11 +7,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
+	state "github.com/0xfelix/redfish-event-listener/pkg/state/v1"
 )
 
 type (
-	CreateSubscriptionFunc func(destinationURL string, nodeConfig *node.NodeConfig, token string) (string, error)
-	DeleteSubscriptionFunc func(subscriptionURI string, nodeConfig *node.NodeConfig) error
+	CreateSubscriptionFunc func(destinationURL string, nodeConfig *state.NodeConfig, token string) (string, error)
+	DeleteSubscriptionFunc func(subscriptionURI string, nodeConfig *state.NodeConfig) error
 )
 
 func FarTemplateGVK() schema.GroupVersionKind {

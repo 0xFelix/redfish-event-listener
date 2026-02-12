@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/0xfelix/redfish-event-listener/pkg/node"
+	state "github.com/0xfelix/redfish-event-listener/pkg/state/v1"
 )
 
 func NewReconciler(
@@ -84,7 +85,7 @@ func (f *farConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, reconcile.TerminalError(fmt.Errorf("failed to parse FenceAgentsRemediationTemplate: %w", err))
 	}
 
-	configsByName := map[string]node.NodeConfig{}
+	configsByName := map[string]state.NodeConfig{}
 	for _, nodeConfig := range nodeConfigs {
 		name := nodeConfig.NodeName
 		configsByName[name] = nodeConfig
@@ -116,15 +117,15 @@ func isFarTemplateRelevant(obj *unstructured.Unstructured) (bool, error) {
 	return true, nil
 }
 
-func (f *farConfigReconciler) updateSubscriptions(configsByName map[string]node.NodeConfig, farObjName string) error {
+func (f *farConfigReconciler) updateSubscriptions(configsByName map[string]state.NodeConfig, farObjName string) error {
 	f.infoState.Lock.Lock()
 	defer f.infoState.Lock.Unlock()
 
 	var resultErrors []error
 
 	// Remove old subscriptions
-	for nodeName, nodeInfo := range f.infoState.Infos {
-		if nodeInfo.FarObjName != farObjName {
+	for nodeName, nodeInfo := range f.infoState.Subs {
+		if nodeInfo.FarTemplateName != farObjName {
 			continue
 		}
 		if _, ok := configsByName[nodeName]; ok {
@@ -135,7 +136,7 @@ func (f *farConfigReconciler) updateSubscriptions(configsByName map[string]node.
 
 	// Create new subscriptions
 	for nodeName, config := range configsByName {
-		if _, exists := f.infoState.Infos[nodeName]; exists {
+		if _, exists := f.infoState.Subs[nodeName]; exists {
 			continue
 		}
 
@@ -157,8 +158,8 @@ func (f *farConfigReconciler) deleteSubscriptionsForObj(objName string) error {
 	defer f.infoState.Lock.Unlock()
 
 	var resultErrors []error
-	for _, nodeInfo := range f.infoState.Infos {
-		if nodeInfo.FarObjName == objName {
+	for _, nodeInfo := range f.infoState.Subs {
+		if nodeInfo.FarTemplateName == objName {
 			resultErrors = append(resultErrors, f.deleteSubscriptionLocked(&nodeInfo))
 		}
 	}
@@ -166,7 +167,7 @@ func (f *farConfigReconciler) deleteSubscriptionsForObj(objName string) error {
 	return errors.Join(resultErrors...)
 }
 
-func (f *farConfigReconciler) createSubscriptionLocked(config node.NodeConfig, token, farObjName string) error {
+func (f *farConfigReconciler) createSubscriptionLocked(config state.NodeConfig, token, farObjName string) error {
 	// This function assumes that write lock f.infoState.Lock() is held
 
 	subscriptionID, err := f.createSubscriptionFunc(f.destinationURL, &config, token)
@@ -174,11 +175,11 @@ func (f *farConfigReconciler) createSubscriptionLocked(config node.NodeConfig, t
 		return fmt.Errorf("failed to create subscription for node %q: %w", config.NodeName, err)
 	}
 
-	f.infoState.Infos[config.NodeName] = node.NodeInfo{
-		NodeConfig:     config,
-		SubscriptionID: subscriptionID,
-		FarObjName:     farObjName,
-		Token:          token,
+	f.infoState.Subs[config.NodeName] = state.Subscription{
+		NodeConfig:      config,
+		URI:             subscriptionID,
+		FarTemplateName: farObjName,
+		Token:           token,
 	}
 	f.infoState.TokenToName[token] = config.NodeName
 
@@ -186,23 +187,23 @@ func (f *farConfigReconciler) createSubscriptionLocked(config node.NodeConfig, t
 	return nil
 }
 
-func (f *farConfigReconciler) deleteSubscriptionLocked(nodeInfo *node.NodeInfo) error {
+func (f *farConfigReconciler) deleteSubscriptionLocked(sub *state.Subscription) error {
 	// This function assumes that write lock f.infoState.Lock() is held
 	var result error
-	if nodeInfo.SubscriptionID != "" {
-		log.Printf("Deleting Redfish event subscription: %s", nodeInfo.SubscriptionID)
-		if err := f.deleteSubscriptionFunc(nodeInfo.SubscriptionID, &nodeInfo.NodeConfig); err != nil {
-			result = fmt.Errorf("failed to delete subscription for node %q: %w", nodeInfo.NodeConfig.NodeName, err)
+	if sub.URI != "" {
+		log.Printf("Deleting Redfish event subscription: %s", sub.URI)
+		if err := f.deleteSubscriptionFunc(sub.URI, &sub.NodeConfig); err != nil {
+			result = fmt.Errorf("failed to delete subscription for node %q: %w", sub.NodeConfig.NodeName, err)
 		}
 	}
 	// The node is deleted from infoState, even if the subscription deletion above failed.
 	// In that case, the BMC will still try to send events, but this pod will ignore them.
-	delete(f.infoState.TokenToName, nodeInfo.Token)
-	delete(f.infoState.Infos, nodeInfo.NodeConfig.NodeName)
+	delete(f.infoState.TokenToName, sub.Token)
+	delete(f.infoState.Subs, sub.NodeConfig.NodeName)
 	return result
 }
 
-func nodeConfigsFromFar(obj *unstructured.Unstructured, insecure bool) ([]node.NodeConfig, error) {
+func nodeConfigsFromFar(obj *unstructured.Unstructured, insecure bool) ([]state.NodeConfig, error) {
 	nodeParameters, found, err := unstructured.NestedMap(obj.Object, "spec", "template", "spec", "nodeparameters")
 	if !found {
 		return nil, fmt.Errorf("failed to find .spec.template.spec.nodeparameters")
@@ -233,7 +234,7 @@ func nodeConfigsFromFar(obj *unstructured.Unstructured, insecure bool) ([]node.N
 		return nil, fmt.Errorf("error getting '--password' parameter: %w", err)
 	}
 
-	var nodeConfigs []node.NodeConfig
+	var nodeConfigs []state.NodeConfig
 	for nodeName, ip := range ips {
 		user, ok := users[nodeName]
 		if !ok {
@@ -245,7 +246,7 @@ func nodeConfigsFromFar(obj *unstructured.Unstructured, insecure bool) ([]node.N
 			log.Printf("FAR config does not specify password for node %q, ignoring the node.", nodeName)
 			continue
 		}
-		nodeConfigs = append(nodeConfigs, node.NodeConfig{
+		nodeConfigs = append(nodeConfigs, state.NodeConfig{
 			NodeName: nodeName,
 			URL:      fmt.Sprintf("https://%s", ip),
 			Username: user,
