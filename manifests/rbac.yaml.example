@@ -16,9 +16,6 @@ rules:
 - apiGroups: [""]
   resources: ["nodes/status"]
   verbs: ["get", "patch", "update"]
-- apiGroups: ["fence-agents-remediation.medik8s.io"]
-  resources: ["fenceagentsremediationtemplates"]
-  verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -56,6 +53,9 @@ rules:
   resources: ["leases"]
   resourceNames: ["h1k2lwrf.redfish-event-listener"]
   verbs: ["get", "list", "watch", "update", "patch", "delete"]
+- apiGroups: ["fence-agents-remediation.medik8s.io"]
+  resources: ["fenceagentsremediationtemplates"]
+  verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
