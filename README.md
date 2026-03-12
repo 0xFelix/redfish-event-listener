@@ -12,6 +12,44 @@ Listener.
 - Node Healthcheck Operator configured
 - Fence Agents Remediation configured
 
+### Configuring Node Heathcheck
+
+Redfish Event Listener will set the node condition `TestCondition` if an issue is detected,
+Node HealthCheck should be configured to look for this particular unhealthy condition and status
+`False`:
+
+```yaml
+apiVersion: remediation.medik8s.io/v1alpha1
+kind: NodeHealthCheck
+metadata:
+  name: redfish-event-listener
+spec:
+  minHealthy: 51%
+  remediationTemplate:
+    apiVersion: fence-agents-remediation.medik8s.io/v1alpha1
+    kind: FenceAgentsRemediationTemplate
+    name: REPLACE_WITH_FAR_TEMPLATE_NAME
+    namespace: REPLACE_WITH_FAR_NAMESPACE
+  selector:
+    matchExpressions:
+      - key: node-role.kubernetes.io/worker
+        operator: Exists
+        values: []
+  unhealthyConditions:
+    - duration: 1s
+      status: 'False'
+      type: TestCondition
+```
+Edit this example manifest replacing the placeholder values:
+
+- `name`: Replace `REPLACE_WITH_FAR_TEMPLATE_NAME` with the name of the created
+  FAR Template.
+- `namespace`: Replace `REPLACE_WITH_FAR_NAMESPACE` with the namespace where
+  FAR has been deployed.
+
+More information about the configuration fields of Node Heathcheck can be located at [Node
+Heathcheck documentation](https://github.com/medik8s/node-healthcheck-operator/blob/main/docs/configuration.md#spec-details).
+
 ## Setup Instructions
 
 ### 1. Build the Container Image
@@ -148,13 +186,14 @@ kubectl get nodes -w
 ### Check Pod Status
 
 ```bash
-kubectl get pods -l app=redfish-event-listener
-kubectl logs -f redfish-event-listener
+kubectl get pods -l app=redfish-event-listener -n NAMESPACE
+kubectl logs -f redfish-event-listener -n NAMESPACE
 ```
 
 ### Check Node Conditions
 
-When an ASR0001 event is received, the specified node condition will be updated:
+When a watchdog reset event is received, the specified node condition will 
+be updated:
 
 ```bash
 kubectl get node <NODE_NAME> -o yaml | grep -A 5 "type: TestCondition"
