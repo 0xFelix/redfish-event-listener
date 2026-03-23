@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	ConditionType          = "TestCondition"
+	ConditionType          = "RedfishWatchdogEvent"
 	WatchdogResetTimeLabel = "redfish.event.listener/last-watchdog-reset-time"
 	// WatchdogResetTimeLabelFmt is a label-safe RFC3339-like format (hyphens instead of colons in the time part).
 	// Example: 2026-02-17T12-11-43Z
@@ -47,11 +47,11 @@ func UpdateNodeCondition(k8sClient kubernetes.Interface, nodeName string) error 
 	now := metav1.Now()
 	newCondition := corev1.NodeCondition{
 		Type:               ConditionType,
-		Status:             corev1.ConditionFalse,
+		Status:             corev1.ConditionTrue,
 		LastHeartbeatTime:  now,
 		LastTransitionTime: now,
 		Reason:             "EventReceived",
-		Message:            "Redfish event ASR0001 received",
+		Message:            "Redfish watchdog expired event received",
 	}
 
 	conditionExists := false

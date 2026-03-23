@@ -196,15 +196,15 @@ var _ = Describe("Redish event server", func() {
 				condition := getNodeCondition(n.Status.Conditions, node.ConditionType)
 
 				if expectCondition {
-					Expect(condition).NotTo(BeNil(), "expected TestCondition to be set for watchdog events")
-					Expect(condition.Status).To(Equal(corev1.ConditionFalse))
+					Expect(condition).NotTo(BeNil(), "expected RedfishWatchdogEvent to be set for watchdog events")
+					Expect(condition.Status).To(Equal(corev1.ConditionTrue))
 
 					Expect(n.Labels).To(HaveKeyWithValue(node.WatchdogResetTimeLabel,
 						transitionTime.Time.Format(node.WatchdogResetTimeLabelFmt)))
 					// Make sure it does not delete other labels
 					Expect(n.Labels).To(HaveLen(2))
 				} else {
-					Expect(condition).To(BeNil(), "expected TestCondition to not be set for non-watchdog events")
+					Expect(condition).To(BeNil(), "expected RedfishWatchdogEvent to not be set for non-watchdog events")
 					Expect(n.Labels).NotTo(HaveKey(node.WatchdogResetTimeLabel))
 				}
 			},

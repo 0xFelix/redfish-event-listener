@@ -14,9 +14,9 @@ Listener.
 
 ### Configuring Node Heathcheck
 
-Redfish Event Listener will set the node condition `TestCondition` if an issue is detected,
+Redfish Event Listener will set the node condition `RedfishWatchdogEvent` if an issue is detected,
 Node HealthCheck should be configured to look for this particular unhealthy condition and status
-`False`:
+`True`:
 
 ```yaml
 apiVersion: remediation.medik8s.io/v1alpha1
@@ -37,8 +37,8 @@ spec:
         values: []
   unhealthyConditions:
     - duration: 1s
-      status: 'False'
-      type: TestCondition
+      status: 'True'
+      type: RedfishWatchdogEvent
 ```
 Edit this example manifest replacing the placeholder values:
 
@@ -192,11 +192,11 @@ kubectl logs -f redfish-event-listener -n NAMESPACE
 
 ### Check Node Conditions
 
-When a watchdog reset event is received, the specified node condition will 
+When a watchdog expired event is received, the specified node condition will 
 be updated:
 
 ```bash
-kubectl get node <NODE_NAME> -o yaml | grep -A 5 "type: TestCondition"
+kubectl get node <NODE_NAME> -o yaml | grep -A 5 "type: RedfishWatchdogEvent"
 ```
 
 ## Cleanup
