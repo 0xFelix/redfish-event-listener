@@ -107,7 +107,7 @@ func (r *nodeConditionReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 func shouldReconcile(node *corev1.Node) bool {
 	// Look for the watchdog condition, this means a watchdog reset event has been received.
 	watchdogConditionStatus := findNodeCondition(node.Status.Conditions, redfishnode.ConditionType)
-	if watchdogConditionStatus == nil || watchdogConditionStatus.Status != corev1.ConditionFalse {
+	if watchdogConditionStatus == nil || watchdogConditionStatus.Status != corev1.ConditionTrue {
 		return false
 	}
 

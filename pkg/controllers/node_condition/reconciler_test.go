@@ -136,6 +136,6 @@ func nodeReadyFalseCondition() *corev1.NodeCondition {
 func watchdogCondition() *corev1.NodeCondition {
 	return &corev1.NodeCondition{
 		Type:   node.ConditionType,
-		Status: corev1.ConditionFalse,
+		Status: corev1.ConditionTrue,
 	}
 }
