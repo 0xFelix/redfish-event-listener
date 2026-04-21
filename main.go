@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	corev1 "k8s.io/api/core/v1"
@@ -33,9 +34,12 @@ import (
 )
 
 const (
-	envDestinationURL  = "DESTINATION_URL"
-	envPodNamespace    = "POD_NAMESPACE"
-	envRedfishInsecure = "REDFISH_INSECURE"
+	leaderElectionID = "h1k2lwrf.redfish-event-listener"
+
+	envDestinationURL   = "DESTINATION_URL"
+	envPodNamespace     = "POD_NAMESPACE"
+	envRedfishInsecure  = "REDFISH_INSECURE"
+	envDeleteSubsOnExit = "DELETE_SUBS_ON_EXIT"
 
 	// This name is also used in RBAC role to only allow access to single secret
 	secretName = "redfish-event-listener-state"
@@ -48,7 +52,7 @@ func main() {
 }
 
 // Ignoring linter, because we will change this function in future PRs.
-func run() error { //nolint:funlen
+func run() error { //nolint:funlen,gocyclo
 	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -65,14 +69,24 @@ func run() error { //nolint:funlen
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
 	grp := sync.WaitGroup{}
 	defer grp.Wait()
 
 	podNamespace := lookupEnv(envPodNamespace)
+	deleteSubsOnExit := lookupDeleteSubsOnExit()
 
 	stateMgr := statemanager.New(secretName, podNamespace)
 
+	isLeader := &atomic.Bool{}
+
 	defer func() {
+		if !deleteSubsOnExit || !isLeader.Load() {
+			return
+		}
+
 		subs := stateMgr.GetSubscriptions()
 		for _, sub := range subs {
 			if sub.URI != "" {
@@ -83,9 +97,6 @@ func run() error { //nolint:funlen
 			}
 		}
 	}()
-
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
 
 	const eventChSize = 128
 	eventCh := make(chan server.Event, eventChSize)
@@ -137,9 +148,18 @@ func run() error { //nolint:funlen
 		Metrics: metricsserver.Options{
 			BindAddress: "0",
 		},
+		LeaderElection:   true,
+		LeaderElectionID: leaderElectionID,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create controller manager: %w", err)
+	}
+
+	if err = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		isLeader.Store(true)
+		return nil
+	})); err != nil {
+		return fmt.Errorf("failed to add leader tracker runnable: %w", err)
 	}
 
 	if err = stateMgr.AddToManager(mgr); err != nil {
@@ -217,4 +237,16 @@ func lookupInsecure() bool {
 		log.Fatalf("Invalid value %s for environment variable REDFISH_INSECURE", val)
 	}
 	return insecure
+}
+
+func lookupDeleteSubsOnExit() bool {
+	val, ok := os.LookupEnv(envDeleteSubsOnExit)
+	if !ok {
+		return false
+	}
+	deleteSubs, err := strconv.ParseBool(val)
+	if err != nil {
+		log.Fatalf("Invalid value %s for environment variable DELETE_SUBS_ON_EXIT", val)
+	}
+	return deleteSubs
 }
