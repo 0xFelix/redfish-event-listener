@@ -13,7 +13,9 @@ import (
 	"sync/atomic"
 	"syscall"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
@@ -37,6 +39,7 @@ const (
 	leaderElectionID = "h1k2lwrf.redfish-event-listener"
 
 	envDestinationURL   = "DESTINATION_URL"
+	envDeploymentName   = "DEPLOYMENT_NAME"
 	envPodNamespace     = "POD_NAMESPACE"
 	envRedfishInsecure  = "REDFISH_INSECURE"
 	envDeleteSubsOnExit = "DELETE_SUBS_ON_EXIT"
@@ -76,9 +79,22 @@ func run() error { //nolint:funlen,gocyclo
 	defer grp.Wait()
 
 	podNamespace := lookupEnv(envPodNamespace)
+	deploymentName := lookupEnv(envDeploymentName)
 	deleteSubsOnExit := lookupDeleteSubsOnExit()
 
-	stateMgr := statemanager.New(secretName, podNamespace)
+	deployment, err := k8sClient.AppsV1().Deployments(podNamespace).Get(ctx, deploymentName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get Deployment %s/%s: %w", podNamespace, deploymentName, err)
+	}
+
+	ownerRef := metav1.OwnerReference{
+		APIVersion: appsv1.SchemeGroupVersion.String(),
+		Kind:       "Deployment",
+		Name:       deployment.Name,
+		UID:        deployment.UID,
+	}
+
+	stateMgr := statemanager.New(secretName, podNamespace, ownerRef)
 
 	isLeader := &atomic.Bool{}
 

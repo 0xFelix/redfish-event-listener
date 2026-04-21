@@ -27,10 +27,19 @@ var _ = Describe("StateManager", func() {
 		token      = "token"
 	)
 
-	var sm *stateManager
+	var (
+		ownerRef metav1.OwnerReference
+		sm       *stateManager
+	)
 
 	BeforeEach(func() {
-		sm = New(secretName, namespace).(*stateManager)
+		ownerRef = metav1.OwnerReference{
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+			Name:       "test-deployment",
+			UID:        "test-deployment-uid",
+		}
+		sm = New(secretName, namespace, ownerRef).(*stateManager)
 	})
 
 	Context("GetNodeNameByToken", func() {
@@ -462,6 +471,27 @@ var _ = Describe("StateManager", func() {
 				g.Expect(json.Unmarshal(stateBytes, &stateData)).To(Succeed())
 				g.Expect(stateData.Version).To(Equal(state.VersionV1))
 				g.Expect(stateData.Subscriptions).To(Equal(subs))
+			}, 2*time.Second, 100*time.Millisecond).Should(Succeed())
+		})
+
+		It("should set ownerReference to the deployment", func() {
+			subs := []state.Subscription{{
+				NodeConfig:      state.NodeConfig{NodeName: node},
+				URI:             "uri1",
+				FarTemplateName: "far1",
+				Token:           token,
+			}}
+			sm.SetSubscriptions(subs)
+
+			Eventually(func(g Gomega) {
+				secret := &core.Secret{}
+				g.Expect(fakeClient.Get(ctx, client.ObjectKey{
+					Name:      secretName,
+					Namespace: namespace,
+				}, secret)).To(Succeed())
+
+				g.Expect(secret.OwnerReferences).To(HaveLen(1))
+				g.Expect(secret.OwnerReferences).To(ContainElement(ownerRef))
 			}, 2*time.Second, 100*time.Millisecond).Should(Succeed())
 		})
 

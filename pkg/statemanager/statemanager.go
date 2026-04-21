@@ -53,18 +53,20 @@ type stateManager struct {
 
 	tokenToName map[string]string
 
-	secretName string
-	namespace  string
-	client     client.Client
+	secretName     string
+	secretOwnerRef metav1.OwnerReference
+	namespace      string
+	client         client.Client
 }
 
-func New(secretName, namespace string) StateManager {
+func New(secretName, namespace string, secretOwnerRef metav1.OwnerReference) StateManager {
 	return &stateManager{
-		subs:        []state.Subscription{},
-		tokenToName: map[string]string{},
-		subsChanged: make(chan struct{}, 1),
-		secretName:  secretName,
-		namespace:   namespace,
+		subs:           []state.Subscription{},
+		tokenToName:    map[string]string{},
+		subsChanged:    make(chan struct{}, 1),
+		secretName:     secretName,
+		namespace:      namespace,
+		secretOwnerRef: secretOwnerRef,
 	}
 }
 
@@ -219,8 +221,9 @@ func (s *stateManager) writeState(ctx context.Context) error {
 	if k8serrors.IsNotFound(err) {
 		newSecret := &core.Secret{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      s.secretName,
-				Namespace: s.namespace,
+				Name:            s.secretName,
+				Namespace:       s.namespace,
+				OwnerReferences: []metav1.OwnerReference{s.secretOwnerRef},
 			},
 		}
 		if writeErr := writeStateToSecret(newSecret, stateObj); writeErr != nil {
