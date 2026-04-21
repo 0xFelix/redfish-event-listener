@@ -1,6 +1,6 @@
 # Ignore specific manifest files
 manifests/ingress.yaml
-manifests/pod.yaml
+manifests/deployment.yaml
 manifests/secret.yaml
 manifests/rbac.yaml
 
