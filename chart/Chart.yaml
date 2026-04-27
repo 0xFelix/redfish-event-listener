@@ -1,0 +1,17 @@
+apiVersion: v2
+name: redfish-event-listener
+description: Listens for Redfish BMC watchdog events and integrates with Kubernetes node management
+type: application
+version: 0.1.0
+appVersion: "latest"
+home: https://github.com/0xFelix/redfish-event-listener
+sources:
+  - https://github.com/0xFelix/redfish-event-listener
+maintainers:
+  - name: 0xFelix
+keywords:
+  - redfish
+  - bmc
+  - watchdog
+  - kubernetes
+  - remediation

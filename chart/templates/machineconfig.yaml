@@ -1,0 +1,32 @@
+{{- if .Values.machineConfig.enabled }}
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: {{ .Values.machineConfig.name }}
+  labels:
+    machineconfiguration.openshift.io/role: {{ .Values.machineConfig.role }}
+spec:
+  config:
+    ignition:
+      version: 3.5.0
+    storage:
+      files:
+        - contents:
+            compression: ""
+            source: data:,ipmi_watchdog%0A
+          mode: 420
+          overwrite: true
+          path: /etc/modules-load.d/ipmi-watchdog.conf
+        - contents:
+            compression: gzip
+            source: data:;base64,H4sIAAAAAAAC/2yQwWrzMBCE73qKAV9/wh/IyZBLc+rJheZuVHldi0hasdrU7dsX2YlJoNfRzOibbfASrLsEXxQ6EV6TUsD51GG26qaBP6GMLPRFSeE4jcE7LeZjS/nzqevnQY1p8E6KyMM1EDir51QwssDn6Pt7X2saWFcfj0KFtMUbycgSYTFZGbComCdKUB9JQN/ZC5WdaRaBr3rc/2+XzypyDc1W6IF4dVXyAwo5TsOSzjZ5V1n7radFl2BxIUkUVsM/lFvz4wlWqqqWn6IUYUclwf7WvzP3wU9jn5Zu9Ie/SMxvAAAA///RcIBeiwEAAA==
+          mode: 420
+          overwrite: true
+          path: /etc/modprobe.d/watchdogs.conf
+        - contents:
+            compression: ""
+            source: data:,%5BManager%5D%0A%23%20systemd%20will%20pet%20the%20dog%20at%20half%20this%20interval%20(every%202s).%0ARuntimeWatchdogSec%3D4s%0A
+          mode: 420
+          overwrite: true
+          path: /etc/systemd/system.conf.d/watchdog.conf
+{{- end }}
