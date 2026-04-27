@@ -1,0 +1,30 @@
+{{- if .Values.serviceAccount.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "redfish-event-listener.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "redfish-event-listener.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["redfish-event-listener-state"]
+    verbs: ["get", "list", "watch", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["h1k2lwrf.redfish-event-listener"]
+    verbs: ["get", "list", "watch", "update", "patch", "delete"]
+  - apiGroups: ["fence-agents-remediation.medik8s.io"]
+    resources: ["fenceagentsremediationtemplates"]
+    verbs: ["get", "list", "watch"]
+{{- end }}

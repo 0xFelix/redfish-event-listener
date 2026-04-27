@@ -1,0 +1,16 @@
+redfish-event-listener has been deployed.
+
+Check the deployment status:
+
+  kubectl get deployment {{ include "redfish-event-listener.fullname" . }} -n {{ .Release.Namespace }}
+
+{{- if .Values.ingress.enabled }}
+
+Ingress is enabled at: {{ .Values.ingress.host }}
+{{- end }}
+
+{{- if .Values.machineConfig.enabled }}
+
+WARNING: MachineConfig "{{ .Values.machineConfig.name }}" has been applied.
+This will configure IPMI watchdog on {{ .Values.machineConfig.role }} nodes and cause reboots.
+{{- end }}

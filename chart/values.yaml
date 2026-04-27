@@ -1,0 +1,94 @@
+# -- Number of replicas
+replicaCount: 2
+
+image:
+  # -- Container image repository (required)
+  repository: ""
+  # -- Image pull policy
+  pullPolicy: IfNotPresent
+  # -- Image tag (defaults to Chart appVersion)
+  tag: ""
+
+# -- Image pull secrets
+imagePullSecrets: []
+# -- Override the chart name
+nameOverride: ""
+# -- Override the full release name
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Create a ServiceAccount
+  create: true
+  # -- ServiceAccount annotations
+  annotations: {}
+  # -- Name override (defaults to fullname)
+  name: ""
+
+# -- Pod annotations
+podAnnotations: {}
+# -- Pod-level security context
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container-level security context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+
+service:
+  # -- Service type
+  type: ClusterIP
+  # -- Service port
+  port: 8080
+
+ingress:
+  # -- Enable Ingress
+  enabled: false
+  # -- Ingress class name
+  className: ""
+  # -- Ingress annotations
+  annotations: {}
+  # -- Ingress hostname (required when enabled)
+  host: ""
+  tls:
+    # -- Enable TLS
+    enabled: true
+    # -- TLS secret name (leave empty for default certificate)
+    secretName: ""
+
+secret:
+  # -- Create the credentials Secret
+  create: true
+  # -- Name override (defaults to "<fullname>-credentials")
+  name: ""
+  # -- Skip TLS verification for Redfish connections
+  insecure: false
+  # -- External URL where Redfish events will be sent
+  destinationURL: ""
+
+podAntiAffinity:
+  # -- Enable pod anti-affinity
+  enabled: true
+
+# -- Node selector
+nodeSelector: {}
+# -- Tolerations
+tolerations: []
+# -- Resource requests and limits
+resources: {}
+
+# -- Delete Redfish subscriptions when a pod exits
+deleteSubsOnExit: false
+
+machineConfig:
+  # -- Enable OpenShift MachineConfig for IPMI watchdog (will reboot nodes)
+  enabled: false
+  # -- MachineConfig resource name
+  name: 99-worker-watchdog
+  # -- MachineConfig role label
+  role: worker
