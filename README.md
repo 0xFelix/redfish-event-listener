@@ -1,7 +1,7 @@
-# Deployment Guide
+# Redfish Event Listener
 
-This directory contains Kubernetes manifests for deploying the Redfish Event
-Listener.
+Listens for Redfish BMC watchdog events and integrates with Kubernetes node
+management.
 
 ## Prerequisites
 
@@ -12,7 +12,7 @@ Listener.
 - Node Healthcheck Operator configured
 - Fence Agents Remediation configured
 
-### Configuring Node Heathcheck
+### Configuring Node Healthcheck
 
 Redfish Event Listener will set the node condition `RedfishWatchdogEvent` if an issue is detected,
 Node HealthCheck should be configured to look for this particular unhealthy condition and status
@@ -40,6 +40,7 @@ spec:
       status: 'True'
       type: RedfishWatchdogEvent
 ```
+
 Edit this example manifest replacing the placeholder values:
 
 - `name`: Replace `REPLACE_WITH_FAR_TEMPLATE_NAME` with the name of the created
@@ -47,8 +48,8 @@ Edit this example manifest replacing the placeholder values:
 - `namespace`: Replace `REPLACE_WITH_FAR_NAMESPACE` with the namespace where
   FAR has been deployed.
 
-More information about the configuration fields of Node Heathcheck can be located at [Node
-Heathcheck documentation](https://github.com/medik8s/node-healthcheck-operator/blob/main/docs/configuration.md#spec-details).
+More information about the configuration fields of Node Healthcheck can be located at [Node
+Healthcheck documentation](https://github.com/medik8s/node-healthcheck-operator/blob/main/docs/configuration.md#spec-details).
 
 ## Setup Instructions
 
@@ -62,8 +63,8 @@ podman build -t YOUR_IMAGE .
 
 Replace `YOUR_IMAGE` with your actual image name, for example:
 
-- `quay.io/yourusername/sbetest:latest`
-- `docker.io/yourusername/sbetest:latest`
+- `quay.io/yourusername/redfish-event-listener:latest`
+- `docker.io/yourusername/redfish-event-listener:latest`
 
 Push the image to your registry:
 
@@ -71,13 +72,61 @@ Push the image to your registry:
 podman push YOUR_IMAGE
 ```
 
-### 2. Prepare Manifest Files
+### 2. Deploy
+
+Choose one of the following deployment methods.
+
+#### Option A: Helm Chart
+
+Requires Helm to be installed.
+
+```bash
+helm install redfish-event-listener chart/ \
+  --namespace YOUR_NAMESPACE \
+  --create-namespace \
+  --set image.repository=YOUR_IMAGE_REPO \
+  --set secret.destinationURL=https://events.example.com
+```
+
+All configurable values are documented in `chart/values.yaml`. Key values:
+
+| Value | Description | Default |
+|-------|-------------|---------|
+| `image.repository` | Container image repository (required) | `""` |
+| `image.tag` | Image tag | Chart `appVersion` |
+| `secret.create` | Create the credentials Secret | `true` |
+| `secret.insecure` | Skip TLS verification for Redfish | `false` |
+| `secret.destinationURL` | External webhook URL | `""` |
+| `ingress.enabled` | Enable Ingress | `false` |
+| `ingress.host` | Ingress hostname (required when enabled) | `""` |
+| `machineConfig.enabled` | Enable OpenShift IPMI watchdog MachineConfig | `false` |
+
+To use an externally managed Secret instead of letting the chart create one:
+
+```bash
+helm install redfish-event-listener chart/ \
+  --namespace YOUR_NAMESPACE \
+  --set image.repository=YOUR_IMAGE_REPO \
+  --set secret.create=false \
+  --set secret.name=my-existing-secret
+```
+
+To enable Ingress for external access:
+
+```bash
+helm install redfish-event-listener chart/ \
+  --namespace YOUR_NAMESPACE \
+  --set image.repository=YOUR_IMAGE_REPO \
+  --set ingress.enabled=true \
+  --set ingress.host=events.example.com
+```
+
+#### Option B: Raw Manifests
 
 The `manifests/` directory contains example files (`.example` suffix) that need
 to be customized:
 
 ```bash
-# Copy example files to actual manifest files
 cp manifests/deployment.yaml.example manifests/deployment.yaml
 cp manifests/secret.yaml.example manifests/secret.yaml
 cp manifests/ingress.yaml.example manifests/ingress.yaml
@@ -85,22 +134,22 @@ cp manifests/rbac.yaml.example manifests/rbac.yaml
 cp manifests/service.yaml.example manifests/service.yaml
 ```
 
-**Important:** These files are ignored by git to prevent committing sensitive
-data.
+**Important:** The copied files are ignored by git to prevent committing
+sensitive data.
 
 Edit each file and replace the placeholder values:
 
-#### `rbac.yaml`
+##### `rbac.yaml`
 
 - `namespace`: Replace `REPLACE_WITH_FAR_NAMESPACE` with the namespace where
   FAR has been deployed
 
-#### `service.yaml`
+##### `service.yaml`
 
 - `namespace`: Replace `REPLACE_WITH_FAR_NAMESPACE` with the namespace where
   FAR has been deployed
 
-#### `secret.yaml`
+##### `secret.yaml`
 
 - `insecure`: Set to `"true"` if using self-signed certificates
 - `destinationURL`: The external URL where Redfish events will be sent (e.g.,
@@ -108,100 +157,84 @@ Edit each file and replace the placeholder values:
 - `namespace`: Replace `REPLACE_WITH_FAR_NAMESPACE` with the namespace where
   FAR has been deployed
 
-#### `deployment.yaml`
+##### `deployment.yaml`
 
 - `image`: Replace `REPLACE_WITH_YOUR_IMAGE` with your actual image name
 - `replicas`: Adjust the number of replicas as needed (default is 2)
 - `namespace`: Replace `REPLACE_WITH_FAR_NAMESPACE` with the namespace where
   FAR has been deployed
 
-#### `ingress.yaml`
+##### `ingress.yaml`
 
 - `host`: Replace `REPLACE_WITH_YOUR_EXTERNAL_ROUTE` with your external URL
     - **Important:** This should match the `destinationURL` in `secret.yaml`
 - `namespace`: Replace `REPLACE_WITH_FAR_NAMESPACE` with the namespace where
   FAR has been deployed
 
-### 3. Deploy to Kubernetes
-
 Deploy the manifests in the following order:
 
 ```bash
-# 1. Create RBAC (ServiceAccount, ClusterRole, ClusterRoleBinding, Role, RoleBinding)
 kubectl apply -f manifests/rbac.yaml
-
-# 2. Create Secret with credentials
 kubectl apply -f manifests/secret.yaml
-
-# 3. Create the Deployment
 kubectl apply -f manifests/deployment.yaml
-
-# 4. Create the Service
 kubectl apply -f manifests/service.yaml
-
-# 5. Create the Ingress for external access
 kubectl apply -f manifests/ingress.yaml
 ```
 
-### 4. MachineConfig (OpenShift Only)
+### 3. MachineConfig (OpenShift Only)
 
-**WARNING:** The `machineconfig.yaml` is an OpenShift-specific resource that
-enables the IPMI watchdog kernel module.
+**WARNING: Applying the MachineConfig will reboot all matching nodes!**
 
-**⚠️ APPLYING THIS WILL REBOOT ALL MATCHING NODES! ⚠️**
+The MachineConfig loads the `ipmi_watchdog` kernel module and enables it
+persistently across reboots.
 
-This MachineConfig:
-
-- Loads the `ipmi_watchdog` kernel module
-- Enables it persistently across reboots
-- **Will trigger a node reboot** when applied
-
-#### Generating MachineConfig from Butane
-
-The `machineconfig.yaml` file is generated from the `machineconfig.bu` Butane
-configuration file. If you need to modify the MachineConfig, edit the `.bu` file
-and regenerate the YAML:
+When using the **Helm chart**, enable it with:
 
 ```bash
-# After updating machineconfig.bu, regenerate the YAML
-butane manifests/machineconfig.bu -o manifests/machineconfig.yaml
+helm upgrade redfish-event-listener chart/ \
+  --namespace YOUR_NAMESPACE \
+  --reuse-values \
+  --set machineConfig.enabled=true
 ```
 
-**Note:** The YAML file is created from the Butane (.bu) source file. Always
-edit the `.bu` file and regenerate, rather than editing the YAML directly.
-
-#### Applying the MachineConfig
+When using **raw manifests**, apply it directly:
 
 ```bash
-# Review the MachineConfig carefully before applying
 kubectl apply -f manifests/machineconfig.yaml
+```
 
-# Monitor node reboots
-kubectl get nodes -w
+The `machineconfig.yaml` is generated from the `machineconfig.bu` Butane source.
+To regenerate after editing the `.bu` file:
+
+```bash
+butane manifests/machineconfig.bu -o manifests/machineconfig.yaml
 ```
 
 ## Verification
 
-### Check Deployment and Pod Status
+### Check Deployment Status
 
 ```bash
-kubectl get deployment redfish-event-listener -n NAMESPACE
-kubectl get pods -l app=redfish-event-listener -n NAMESPACE
-kubectl logs -l app=redfish-event-listener -n NAMESPACE -f
+# Helm
+kubectl get deployment -l app.kubernetes.io/name=redfish-event-listener -n YOUR_NAMESPACE
+
+# Raw manifests
+kubectl get deployment redfish-event-listener -n YOUR_NAMESPACE
 ```
 
-### Check Node Conditions
-
-When a watchdog expired event is received, the specified node condition will 
-be updated:
-
 ```bash
-kubectl get node <NODE_NAME> -o yaml | grep -A 5 "type: RedfishWatchdogEvent"
+kubectl get node NODE_NAME -o yaml | grep -A 5 "type: RedfishWatchdogEvent"
 ```
 
 ## Cleanup
 
-Remove all resources:
+Helm:
+
+```bash
+helm uninstall redfish-event-listener --namespace YOUR_NAMESPACE
+```
+
+Raw manifests:
 
 ```bash
 kubectl delete -f manifests/ingress.yaml
@@ -211,12 +244,5 @@ kubectl delete -f manifests/secret.yaml
 kubectl delete -f manifests/rbac.yaml
 ```
 
-The Secret (`redfish-event-listener-state`) will be automatically cleaned up when the 
-deployment is deleted due to owner references.
-
-**Note:** Do not delete the MachineConfig unless you want to disable the IPMI
-watchdog (this will also trigger node reboots).
-
-## Architecture notes
-
-The FAR controller is not thread safe, so it runs in a single goroutine.
+**Note:** If MachineConfig was applied, removing it will also trigger node
+reboots.
