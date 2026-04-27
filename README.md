@@ -78,7 +78,7 @@ to be customized:
 
 ```bash
 # Copy example files to actual manifest files
-cp manifests/pod.yaml.example manifests/pod.yaml
+cp manifests/deployment.yaml.example manifests/deployment.yaml
 cp manifests/secret.yaml.example manifests/secret.yaml
 cp manifests/ingress.yaml.example manifests/ingress.yaml
 cp manifests/rbac.yaml.example manifests/rbac.yaml
@@ -108,11 +108,10 @@ Edit each file and replace the placeholder values:
 - `namespace`: Replace `REPLACE_WITH_FAR_NAMESPACE` with the namespace where
   FAR has been deployed
 
-#### `pod.yaml`
+#### `deployment.yaml`
 
 - `image`: Replace `REPLACE_WITH_YOUR_IMAGE` with your actual image name
-- Node affinity rule: Replace `REPLACE_WITH_NODE_TO_SCHEDULE_ON` with the
-  node you want the Pod to be scheduled on
+- `replicas`: Adjust the number of replicas as needed (default is 2)
 - `namespace`: Replace `REPLACE_WITH_FAR_NAMESPACE` with the namespace where
   FAR has been deployed
 
@@ -128,14 +127,14 @@ Edit each file and replace the placeholder values:
 Deploy the manifests in the following order:
 
 ```bash
-# 1. Create RBAC (ServiceAccount, ClusterRole, ClusterRoleBinding)
+# 1. Create RBAC (ServiceAccount, ClusterRole, ClusterRoleBinding, Role, RoleBinding)
 kubectl apply -f manifests/rbac.yaml
 
 # 2. Create Secret with credentials
 kubectl apply -f manifests/secret.yaml
 
-# 3. Deploy the Pod
-kubectl apply -f manifests/pod.yaml
+# 3. Create the Deployment
+kubectl apply -f manifests/deployment.yaml
 
 # 4. Create the Service
 kubectl apply -f manifests/service.yaml
@@ -183,11 +182,12 @@ kubectl get nodes -w
 
 ## Verification
 
-### Check Pod Status
+### Check Deployment and Pod Status
 
 ```bash
+kubectl get deployment redfish-event-listener -n NAMESPACE
 kubectl get pods -l app=redfish-event-listener -n NAMESPACE
-kubectl logs -f redfish-event-listener -n NAMESPACE
+kubectl logs -l app=redfish-event-listener -n NAMESPACE -f
 ```
 
 ### Check Node Conditions
@@ -206,10 +206,17 @@ Remove all resources:
 ```bash
 kubectl delete -f manifests/ingress.yaml
 kubectl delete -f manifests/service.yaml
-kubectl delete -f manifests/pod.yaml
+kubectl delete -f manifests/deployment.yaml
 kubectl delete -f manifests/secret.yaml
 kubectl delete -f manifests/rbac.yaml
 ```
 
+The Secret (`redfish-event-listener-state`) will be automatically cleaned up when the 
+deployment is deleted due to owner references.
+
 **Note:** Do not delete the MachineConfig unless you want to disable the IPMI
 watchdog (this will also trigger node reboots).
+
+## Architecture notes
+
+The FAR controller is not thread safe, so it runs in a single goroutine.
