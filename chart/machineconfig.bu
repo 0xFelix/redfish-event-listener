@@ -1,0 +1,35 @@
+variant: openshift
+version: 4.20.0
+metadata:
+  name: 99-worker-watchdog
+  labels:
+    machineconfiguration.openshift.io/role: worker
+storage:
+  files:
+  - path: /etc/modules-load.d/ipmi-watchdog.conf
+    mode: 0644
+    overwrite: true
+    contents:
+      inline: |
+        ipmi_watchdog
+  - path: /etc/modprobe.d/watchdogs.conf
+    mode: 0644
+    overwrite: true
+    contents:
+      inline: |
+        # Blacklist the Intel TCO watchdog to prevent conflicts
+        blacklist iTCO_wdt
+
+        # Set module options for ipmi_watchdog:
+        # action=reset: Perform a hard reset when timer expires.
+        # timeout=10: Set the hardware watchdog timeout to 4 seconds.
+        # panic_wdt_timeout=1: On a kernel panic, set the watchdog to reset the system after 1 second.
+        options ipmi_watchdog action=reset timeout=4 panic_wdt_timeout=1
+  - path: /etc/systemd/system.conf.d/watchdog.conf
+    mode: 0644
+    overwrite: true
+    contents:
+      inline: |
+        [Manager]
+        # systemd will pet the dog at half this interval (every 2s).
+        RuntimeWatchdogSec=4s
