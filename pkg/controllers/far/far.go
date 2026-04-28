@@ -1,8 +1,11 @@
 package far
 
 import (
+	"fmt"
 	"log"
 	"reflect"
+	"sync"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -41,10 +44,15 @@ func AddToManager(
 	insecure bool,
 	destinationURL string,
 	stateManager statemanager.StateManager,
+	recheckInterval time.Duration,
 	createSub CreateSubscriptionFunc,
 	deleteSub DeleteSubscriptionFunc,
 	mgr manager.Manager,
 ) error {
+	// Lock is used so only one goroutine calls BMC and changes subscriptions state.
+	// This prevents race where reconciler would change subscriptions, and periodic refresher would revert the changes.
+	reconcilerLock := &sync.Mutex{}
+
 	reconciler := NewReconciler(
 		namespace,
 		insecure,
@@ -53,17 +61,28 @@ func AddToManager(
 		stateManager,
 		createSub,
 		deleteSub,
+		reconcilerLock,
 	)
 
 	farTemplate := NewFarTemplateUnstructured()
 
-	return ctrl.NewControllerManagedBy(mgr).
+	err := ctrl.NewControllerManagedBy(mgr).
 		For(farTemplate, builder.WithPredicates(&specChangedPredicate{})).
 		WithOptions(controller.Options{
 			// The current implementation of Reconcile is not thread-safe.
 			MaxConcurrentReconciles: 1,
 		}).
 		Complete(reconciler)
+	if err != nil {
+		return fmt.Errorf("failed adding FarTemplate controller to manager: %w", err)
+	}
+
+	refresher := NewSubscriptionRefresher(destinationURL, recheckInterval, stateManager, createSub, reconcilerLock)
+	if err := mgr.Add(refresher); err != nil {
+		return fmt.Errorf("failed adding subscription refresher to manager: %w", err)
+	}
+
+	return nil
 }
 
 type specChangedPredicate struct {

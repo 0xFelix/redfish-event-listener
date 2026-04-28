@@ -222,6 +222,7 @@ func addControllersToManager(mgr manager.Manager, stateMgr statemanager.StateMan
 		lookupInsecure(),
 		lookupEnv(envDestinationURL),
 		stateMgr,
+		0,
 		redfishlib.CreateSubscription,
 		redfishlib.DeleteSubscription,
 		mgr,
