@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 
 	redfishcommon "github.com/stmcginnis/gofish/common"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -27,6 +28,7 @@ func NewReconciler(
 	stateManager statemanager.StateManager,
 	createSub CreateSubscriptionFunc,
 	deleteSub DeleteSubscriptionFunc,
+	reconcilerLock *sync.Mutex,
 ) reconcile.Reconciler {
 	return &farConfigReconciler{
 		namespace:              namespace,
@@ -36,6 +38,7 @@ func NewReconciler(
 		stateManager:           stateManager,
 		createSubscriptionFunc: createSub,
 		deleteSubscriptionFunc: deleteSub,
+		reconcilerLock:         reconcilerLock,
 	}
 }
 
@@ -48,12 +51,17 @@ type farConfigReconciler struct {
 	stateManager           statemanager.StateManager
 	createSubscriptionFunc CreateSubscriptionFunc
 	deleteSubscriptionFunc DeleteSubscriptionFunc
+
+	reconcilerLock *sync.Mutex
 }
 
 func (f *farConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	if req.Namespace != f.namespace {
 		return ctrl.Result{}, nil
 	}
+
+	f.reconcilerLock.Lock()
+	defer f.reconcilerLock.Unlock()
 
 	currentSubs := f.stateManager.GetSubscriptions()
 	newSubs, reconcileErr := f.reconcileTemplate(ctx, req, currentSubs)

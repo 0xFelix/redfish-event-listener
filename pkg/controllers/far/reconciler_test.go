@@ -3,6 +3,7 @@ package far_test
 import (
 	"context"
 	stderrors "errors"
+	"sync"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -72,6 +73,7 @@ var _ = Describe("Reconciler", func() {
 				Fail("deleteSubscriptionFunc should not be called")
 				return nil
 			},
+			&sync.Mutex{},
 		)
 	})
 
