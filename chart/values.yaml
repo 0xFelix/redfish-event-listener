@@ -37,8 +37,6 @@ securityContext:
   capabilities:
     drop: ["ALL"]
   runAsNonRoot: true
-  runAsUser: 65532
-  runAsGroup: 65532
 
 service:
   # -- Service type
@@ -56,8 +54,6 @@ ingress:
   # -- Ingress hostname (required when enabled)
   host: ""
   tls:
-    # -- Enable TLS
-    enabled: true
     # -- TLS secret name (leave empty for default certificate)
     secretName: ""
 
