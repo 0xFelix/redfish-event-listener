@@ -15,6 +15,10 @@ This project contains a single main binary (`main.go`), responsible for reading 
 
 The key directories are:
 
+- `chart/`
+  - Contains a Helm chart for deploying redfish-event-listener.
+  - Responsibility: provide a templated, configurable alternative to raw manifests with optional Ingress and OpenShift MachineConfig support.
+
 - `pkg/common/`
   - Contains shared constants used across packages.
   - Responsibility: define cross-cutting values to keep behavior consistent between server and Redfish integration code.
@@ -121,6 +125,21 @@ The `Containerfile` uses a multi-stage build: Go (check the `Containerfile` for 
 
 Follow the steps described in [README](README.md) for deploying redfish-event-listener.
 Note that for development purposes, it is better to keep the `insecure` parameter set to `true`.
+
+### Helm chart
+
+The `chart/` directory contains a Helm chart as an alternative to the raw manifests in `manifests/`.
+
+Key templates:
+- `deployment.yaml` - main workload with configurable replicas, security context, and pod anti-affinity.
+- `secret.yaml` - credentials secret with `destinationURL`, `insecure`, and `host/port` fields.
+- `ingress.yaml` - optional Ingress; TLS is always included (full entry with `secretName` or empty `- {}`).
+- `machineconfig.yaml` - optional OpenShift MachineConfig for IPMI watchdog setup. Generated from `chart/machineconfig.bu` (Butane source) via `hack/gen-machineconfig.sh`.
+- RBAC templates - ServiceAccount, ClusterRole/ClusterRoleBinding for node access, and namespace-scoped Role/RoleBinding for FAR template access.
+
+The Butane source (`chart/machineconfig.bu`) defines the watchdog kernel module config. To regenerate the MachineConfig template after editing the Butane source, run `hack/gen-machineconfig.sh` (requires the `butane` CLI).
+
+`values.yaml` documents all configurable parameters with Helm-doc comments (`# --`).
 
 ### CI Pipeline
 
