@@ -135,8 +135,7 @@ var _ = Describe("Reconciler", func() {
 			Expect(stateMgr.State.Subscriptions).To(BeEmpty())
 		},
 		Entry("should skip FAR template without agent field", ""),
-		Entry("should skip FAR template with non-fence_ipmilan agent", "fence_other"),
-	)
+		Entry("should skip FAR template with non-fence_ipmilan agent", "fence_other"))
 
 	Context("FAR template validation", func() {
 		It("should return error when nodeparameters structure is invalid", func() {
@@ -213,8 +212,7 @@ var _ = Describe("Reconciler", func() {
 				Expect(stateMgr.State.Subscriptions[0].NodeConfig.NodeName).To(Equal(node3Name))
 			},
 			Entry("username", farNode{ip: "192.168.1.2", username: "", password: "pass"}),
-			Entry("password", farNode{ip: "192.168.1.2", username: "user", password: ""}),
-		)
+			Entry("password", farNode{ip: "192.168.1.2", username: "user", password: ""}))
 	})
 
 	It("should create subscriptions", func() {

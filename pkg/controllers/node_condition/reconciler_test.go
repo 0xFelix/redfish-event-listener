@@ -64,8 +64,7 @@ var _ = Describe("NodeConditionReconciler", func() {
 			Expect(n.Labels).To(HaveKeyWithValue(node.WatchdogResetTimeLabel, "2025-07-04T18-30-00Z"))
 		},
 		Entry("the watchdog condition is missing", []corev1.NodeCondition{*nodeReadyTrueCondition()}),
-		Entry("the Ready condition is missing", []corev1.NodeCondition{*watchdogCondition()}),
-	)
+		Entry("the Ready condition is missing", []corev1.NodeCondition{*watchdogCondition()}))
 
 	DescribeTable("should do not remove the label and condition if the node",
 		func(conds []corev1.NodeCondition, labelValue string) {
@@ -81,19 +80,15 @@ var _ = Describe("NodeConditionReconciler", func() {
 		},
 		Entry("is not ready",
 			[]corev1.NodeCondition{*watchdogCondition(), *nodeReadyFalseCondition()},
-			"2024-07-04T18-30-00Z",
-		),
+			"2024-07-04T18-30-00Z"),
 		Entry("is ready but the last transition time is before the label time",
 			[]corev1.NodeCondition{*watchdogCondition(), *nodeReadyTrueCondition()},
-			"2026-07-04T18-30-00Z",
-		),
-	)
+			"2026-07-04T18-30-00Z"))
 
 	It("should remove the label and condition if the node is ready", func() {
 		n := newNode(nodeName,
 			[]corev1.NodeCondition{*watchdogCondition(), *nodeReadyTrueCondition()},
-			map[string]string{node.WatchdogResetTimeLabel: "2025-07-04T18-30-00Z"},
-		)
+			map[string]string{node.WatchdogResetTimeLabel: "2025-07-04T18-30-00Z"})
 		Expect(fakeClient.Create(ctx, n)).To(Succeed())
 
 		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})

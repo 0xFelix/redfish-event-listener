@@ -75,12 +75,10 @@ var _ = Describe("Redish event server", func() {
 			},
 			Entry("non-POST requests",
 				func() *http.Request { return httptest.NewRequest(http.MethodGet, "/", http.NoBody) },
-				http.StatusMethodNotAllowed,
-			),
+				http.StatusMethodNotAllowed),
 			Entry("non-JSON requests",
 				func() *http.Request { return httptest.NewRequest(http.MethodPost, "/", strings.NewReader("not-json")) },
-				http.StatusBadRequest,
-			),
+				http.StatusBadRequest),
 			Entry("too long requests",
 				func() *http.Request {
 					prefix := strings.NewReader(`{"Context":"`)
@@ -92,8 +90,7 @@ var _ = Describe("Redish event server", func() {
 
 					return httptest.NewRequest(http.MethodPost, "/", io.MultiReader(prefix, longContext, sufix))
 				},
-				http.StatusBadRequest,
-			),
+				http.StatusBadRequest),
 			Entry("event context requests",
 				func() *http.Request {
 					ev := redfish.Event{Context: "wrong-ctx"}
@@ -101,8 +98,7 @@ var _ = Describe("Redish event server", func() {
 					Expect(err).ToNot(HaveOccurred())
 					return httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
 				},
-				http.StatusBadRequest,
-			),
+				http.StatusBadRequest),
 			Entry("unauthorized requests",
 				func() *http.Request {
 					ev := redfish.Event{Context: common.EventContextPrefix + "incorrect-token"}
@@ -110,9 +106,7 @@ var _ = Describe("Redish event server", func() {
 					Expect(err).ToNot(HaveOccurred())
 					return httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
 				},
-				http.StatusUnauthorized,
-			),
-		)
+				http.StatusUnauthorized))
 
 		It("should accept valid event and forwards it on channel", func() {
 			ev := redfish.Event{
@@ -209,8 +203,7 @@ var _ = Describe("Redish event server", func() {
 				}
 			},
 			Entry("should not set a node condition for non-watchdog events", "NOT_WATCHDOG", false),
-			Entry("should set a node condition for watchdog events", "ASR0001", true),
-		)
+			Entry("should set a node condition for watchdog events", "ASR0001", true))
 	})
 })
 
