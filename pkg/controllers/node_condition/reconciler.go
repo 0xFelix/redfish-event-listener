@@ -90,14 +90,12 @@ func (r *nodeConditionReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if readyCondition.Status == corev1.ConditionTrue {
 		if readyCondition.LastTransitionTime.After(lastTransitionTime) {
 			log.Info("Ready condition lastTransitionTime is after watchdog reset label time, removing label and condition",
-				"node", node.Name,
-			)
+				"node", node.Name)
 			removeLabelAndCondition(node)
 		} else {
 			log.Info("Ready condition is true but it's lastTransitionTime is not after the watchdog reset label time"+
 				"not removing label and condition",
-				"node", node.Name,
-			)
+				"node", node.Name)
 		}
 		return ctrl.Result{}, nil
 	}

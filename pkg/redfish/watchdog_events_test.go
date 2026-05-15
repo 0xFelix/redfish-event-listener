@@ -22,6 +22,5 @@ var _ = Describe("Watchdog Events", func() {
 		Entry("does not match Supermicro different event", "SupermicroRegistry.1.2.0xc804fa", false),
 		Entry("matches exact Lenovo event", "FQXSPWD0004I", true),
 		Entry("matches Lenovo event with dotted prefix", "LenovoEventRegistry.2.1.FQXSPWD0004I", true),
-		Entry("does not match a different Lenovo event", "LenovoEventRegistry.2.1.FQXSPWD0005I", false),
-	)
+		Entry("does not match a different Lenovo event", "LenovoEventRegistry.2.1.FQXSPWD0005I", false))
 })

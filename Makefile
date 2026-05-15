@@ -54,7 +54,7 @@ $(GOLANGCI_LINT): $(LOCALBIN)
 .PHONY: gofumpt
 gofumpt: $(GOFUMPT) ## Install gofumpt locally if necessary.
 $(GOFUMPT): $(LOCALBIN)
-	GOBIN=$(LOCALBIN) go install mvdan.cc/gofumpt@latest
+	GOBIN=$(LOCALBIN) go install mvdan.cc/gofumpt@v0.10.0
 
 .PHONY: test
 test: ## Run tests
