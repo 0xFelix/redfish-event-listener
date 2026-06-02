@@ -67,6 +67,30 @@ Create the name of the secret to use.
 {{- end }}
 
 {{/*
+Dracut configuration to omit the conflicting watchdog driver from initramfs.
+*/}}
+{{- define "redfish-event-listener.dracutConf" -}}
+omit_drivers+=" {{ .Values.machineConfig.watchdogBlacklist }} "
+{{ end -}}
+
+{{/*
+Watchdog modprobe configuration content.
+The gen-machineconfig.sh script replaces the gzip+base64 Butane output for
+/etc/modprobe.d/watchdogs.conf with this template so the blacklisted module
+can be set via .Values.machineConfig.watchdogBlacklist.
+*/}}
+{{- define "redfish-event-listener.watchdogsConf" -}}
+# Blacklist conflicting watchdog module
+blacklist {{ .Values.machineConfig.watchdogBlacklist }}
+
+# Set module options for ipmi_watchdog:
+# action=reset: Perform a hard reset when timer expires.
+# timeout=4: Set the hardware watchdog timeout to 4 seconds.
+# panic_wdt_timeout=1: On a kernel panic, set the watchdog to reset the system after 1 second.
+options ipmi_watchdog action=reset timeout=4 panic_wdt_timeout=1
+{{ end -}}
+
+{{/*
 Create the container image reference.
 */}}
 {{- define "redfish-event-listener.image" -}}

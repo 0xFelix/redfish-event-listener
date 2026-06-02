@@ -88,3 +88,5 @@ machineConfig:
   name: 99-worker-watchdog
   # -- MachineConfig role label
   role: worker
+  # -- Watchdog module to blacklist (iTCO_wdt for Intel, sp5100_tco for AMD, hpwdt for HPE)
+  watchdogBlacklist: iTCO_wdt

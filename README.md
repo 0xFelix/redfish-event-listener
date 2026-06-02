@@ -100,6 +100,11 @@ All configurable values are documented in `chart/values.yaml`. Key values:
 | `ingress.enabled` | Enable Ingress | `false` |
 | `ingress.host` | Ingress hostname (required when enabled) | `""` |
 | `machineConfig.enabled` | Enable OpenShift IPMI watchdog MachineConfig | `false` |
+| `machineConfig.watchdogBlacklist` | Watchdog module to blacklist (`iTCO_wdt` for Intel, `sp5100_tco` for AMD, `hpwdt` for HPE) | `iTCO_wdt` |
+
+Please note, in case the target cluster is composed of nodes from multiple
+vendors and/or processors, it is required to
+create separate MachineConfig resources for each node role/pool.
 
 To use an externally managed Secret instead of letting the chart create one:
 
