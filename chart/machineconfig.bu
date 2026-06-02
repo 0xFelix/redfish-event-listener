@@ -22,9 +22,15 @@ storage:
 
         # Set module options for ipmi_watchdog:
         # action=reset: Perform a hard reset when timer expires.
-        # timeout=10: Set the hardware watchdog timeout to 4 seconds.
+        # timeout=4: Set the hardware watchdog timeout to 4 seconds.
         # panic_wdt_timeout=1: On a kernel panic, set the watchdog to reset the system after 1 second.
         options ipmi_watchdog action=reset timeout=4 panic_wdt_timeout=1
+  - path: /etc/dracut.conf.d/99-blacklist-watchdog.conf
+    mode: 0644
+    overwrite: true
+    contents:
+      inline: |
+        omit_drivers+=" iTCO_wdt "
   - path: /etc/systemd/system.conf.d/watchdog.conf
     mode: 0644
     overwrite: true
